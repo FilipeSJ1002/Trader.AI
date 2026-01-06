@@ -1,0 +1,14 @@
+# Ignorar arquivos temporários do Python
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+venv/
+.vscode/
+
+# Ignorar Datasets gigantes (GitHub não aceita arquivos > 100MB facilmente)
+*.csv
+*.parquet
+*.zip
+data/
+datasets_brutos/
