@@ -3,3 +3,4 @@ uvicorn
 pandas
 pandas_ta
 numpy
+pyarrow
