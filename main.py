@@ -1,3 +1,9 @@
+import os
+from dotenv import load_dotenv
+
+# Carrega as variáveis de ambiente do arquivo .env
+load_dotenv()
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import pandas as pd
