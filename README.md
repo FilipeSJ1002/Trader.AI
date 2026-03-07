@@ -4,33 +4,31 @@
 >
 > *Projeto de Trabalho de Conclusão de Curso (TCC) - Ciência da Computação.*
 
-![Status](https://img.shields.io/badge/Status-Etapa%201%20(MVP)-blue?style=for-the-badge)
+![Status](https://img.shields.io/badge/Status-Etapa%202%20(Dados%20Reais%20e%20ETL)-blue?style=for-the-badge)
 ![Python](https://img.shields.io/badge/Python-3.10+-yellow?style=for-the-badge&logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)
+![Pandas](https://img.shields.io/badge/Data-Pandas%20%7C%20PyArrow-150458?style=for-the-badge&logo=pandas&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 
 ---
 
 ## 📖 Visão Geral do Projeto
 
-O **TRADER.AI** é uma solução de software desenvolvida para automatizar o processo de tomada de decisão no mercado de criptoativos, com foco específico no par **BTC/USDT**.
+O **TRADER.AI** é uma solução de software desenvolvida para automatizar o processo de tomada de decisão no mercado de criptoativos. 
 
-Diferente de bots tradicionais baseados em regras simples, este sistema utiliza uma arquitetura modular que visa integrar **Estratégias de Confluência** (união de múltiplos indicadores técnicos) e, futuramente, modelos de **Machine Learning** para mitigar o viés emocional humano e explorar ineficiências de mercado em operações 24/7.
+Diferente de sistemas tradicionais baseados em regras simples, esta inteligência quantitativa utiliza uma arquitetura modular que visa integrar **Estratégias de Confluência** (união de múltiplos indicadores técnicos) e, futuramente, modelos de **Machine Learning** para mitigar o viés emocional humano e explorar ineficiências de mercado em operações 24/7.
 
-Atualmente, o projeto encontra-se na **Fase 1 (MVP - Minimum Viable Product)**, consistindo em uma API RESTful capaz de processar dados de mercado e retornar decisões de trading baseadas em lógica matemática rigorosa.
+Atualmente, o projeto encontra-se na **Fase 2**, onde o sistema abandonou dados simulados e passou a consumir **dados históricos reais de 1 minuto** do mercado SPOT (BTC/USDT, ETH/USDT, XRP/USDT). O projeto agora conta com um Pipeline de Dados (ETL) próprio e automatizado.
 
-## 🚀 Funcionalidades da Etapa 1
+## 🚀 Funcionalidades da Etapa 2
 
-Nesta primeira etapa, o sistema foca na validação da arquitetura e da lógica de análise técnica:
+Nesta segunda etapa, a arquitetura foi expandida para suportar grandes volumes de dados reais:
 
-* **API de Alta Performance:** Construída com `FastAPI` para garantir baixa latência no processamento de requisições.
-* **Motor de Análise Técnica (Core):** Implementação robusta de indicadores utilizando a biblioteca `pandas-ta`.
-* **Estratégia de Confluência:** O algoritmo de decisão não depende de um único sinal. Ele exige a confirmação mútua entre:
-    * 📉 **RSI (IFR):** Para detectar condições de sobrecompra/sobrevenda.
-    * 📊 **Bandas de Bollinger:** Para medir a volatilidade e identificar rompimentos.
-    * 📈 **MACD:** Para confirmar a direção e força da tendência.
-    * 📏 **Médias Móveis (EMA 50/200):** Para análise de tendência de longo prazo.
-* **Simulação de Mercado (Mock Data):** Módulo gerador de dados estocásticos que simula movimentos realistas do Bitcoin para validação segura dos algoritmos.
+* **Pipeline ETL Automatizado:** Scripts integrados para extração, transformação e carregamento de dados históricos diretamente da Binance Vision.
+* **Suporte Multi-Moedas:** O sistema agora processa e padroniza o histórico do Bitcoin (BTC), Ethereum (ETH) e Ripple (XRP).
+* **Armazenamento Otimizado:** Transição de arquivos `.csv` brutos para o formato `.parquet` via `pyarrow`, garantindo leitura em milissegundos pela API.
+* **Tratamento de Anomalias:** Lógica de limpeza avançada para lidar com inconsistências de *timestamps* (conversão de milissegundos e microssegundos) na base de dados da corretora.
+* **Segurança e Isolamento:** Implementação de variáveis de ambiente (`.env`) para proteção de dados sensíveis e adoção de ambiente virtual (`venv`).
 
 ## 📂 Estrutura do Projeto
 
@@ -38,109 +36,145 @@ A organização do código segue os padrões de *Clean Code* e modularidade:
 
 ```text
 Trader.AI/
-├── main.py            # Ponto de entrada da API (Rotas e Configuração do Servidor)
-├── strategy.py        # Lógica de Negócios: Cálculos dos indicadores e Regras de Trade
-├── mock_data.py       # (Temp) Gerador de dados fictícios para testes da Etapa 1
-├── requirements.txt   # Lista de dependências do projeto
-├── README.md          # Documentação oficial
-└── .gitignore         # Arquivos ignorados pelo controle de versão
+├── main.py                    # Ponto de entrada da API e rotas
+├── strategy.py                # Core: Cálculos dos indicadores e Regras de Trade
+├── data_loader.py             # Módulo de carregamento otimizado de arquivos Parquet
+├── download_binance_data.py   # Script de Extração (Download progressivo da Binance)
+├── processar_dados.py         # Script de Transformação (Limpeza e conversão para Parquet)
+├── data/                      # Diretório de armazenamento dos dados refinados (.parquet)
+├── .env.example               # Template seguro de variáveis de ambiente
+├── requirements.txt           # Lista de dependências do projeto
+├── README.md                  # Documentação oficial
+└── .gitignore                 # Arquivos ignorados pelo controle de versão
 ```
 
-##
+---
 
 ## 💻 Instalação e Execução
-Siga os passos abaixo para rodar o projeto em sua máquina local.
+
+Siga os passos abaixo para preparar a infraestrutura do sistema.
 
 ### 1. Pré-requisitos
+
 * Python 3.10 ou superior instalado.
 * Git instalado.
 
 ### 2. Clonar o Repositório
-```Code
-git clone [https://github.com/SEU_USUARIO/Trader.AI.git](https://github.com/SEU_USUARIO/Trader.AI.git)
+
+```bash
+git clone https://github.com/SEU_USUARIO/Trader.AI.git
 cd Trader.AI
 ```
 
-### 3. Configurar o Ambiente Virtual (Recomendado)
-Isolar as dependências é uma boa prática de desenvolvimento Python.
+### 3. Configurar o Ambiente Virtual (Obrigatório)
+
+Isolar as dependências é fundamental para o funcionamento do pipeline de dados.
 
 No Windows:
-```Code
+
+```bash
 python -m venv venv
 .\venv\Scripts\activate
 ```
+
 No Linux ou macOS:
-```Code
+
+```bash
 python3 -m venv venv
 source venv/bin/activate
 ```
 
-### 4. Instalar Dependências
-```Code
+### 4. Configurar Variáveis de Ambiente
+
+Duplique o arquivo de exemplo e renomeie-o:
+
+1. Copie o arquivo `.env.example`.
+2. Renomeie a cópia para `.env`.
+3. O sistema já vem configurado para ler o arquivo `data/BTCUSDT_1m.parquet` por padrão.
+
+### 5. Instalar Dependências
+
+```bash
 pip install -r requirements.txt
 ```
 
-### 5. Iniciar o Servidor
-Execute o comando abaixo para iniciar a API. O parâmetro --reload permite que o servidor reinicie automaticamente ao salvar alterações no código.
-```Code
-python -m uvicorn main:app --reload
-```
-✅ Sucesso: O servidor estará rodando em http://127.0.0.1:8000.
+---
 
-##
+## ⚙️ Alimentando a Base de Dados (ETL)
 
-## 🧪 Como Realizar Testes
-O sistema funciona recebendo um "preço atual" e retornando uma análise completa baseada no histórico. Você pode testar usando o Insomnia, Postman ou a documentação automática do Swagger.
+Antes de iniciar o servidor, você precisa baixar e processar o histórico real de mercado.
 
-Exemplo de Requisição (Input)
-Faça uma requisição do tipo POST para o endpoint /analisar_mercado.
+**Passo 1: Extração (Download)**
+Este comando varre os arquivos locais e baixa automaticamente os meses faltantes da corretora.
 
-```text
-URL: http://127.0.0.1:8000/analisar_mercado Header: Content-Type: application/json
+```bash
+python download_binance_data.py
 ```
 
-Corpo (JSON): Imagine que o Bitcoin acabou de ter um pico de preço. Enviamos esse dado para a API:
-```Code
+**Passo 2: Transformação (Limpeza e Parquet)**
+Este comando limpa os CSVs baixados, corrige formatações de data e gera os arquivos `.parquet` finais na pasta `data/`.
+
+```bash
+python processar_dados.py
+```
+
+---
+
+## 🧪 Como Realizar Testes na API
+
+Com os dados processados, inicie a inteligência quantitativa:
+
+```bash
+uvicorn main:app --reload
+```
+
+✅ Sucesso: O servidor estará rodando em `http://127.0.0.1:8000`.
+
+**Exemplo de Requisição (Input)**
+Faça uma requisição do tipo `POST` para o endpoint `/analisar_mercado`.
+
+Corpo (JSON): Simulando a chegada de um novo preço de mercado.
+
+```json
 {
-  "price": 75000.00,
-  "volume": 2500.0
+  "price": 95000.00,
+  "volume": 3500.50
 }
 ```
 
-Exemplo de Resposta (Output)
-A API processará esse preço, adicionará ao histórico, recalculará todos os indicadores e retornará a decisão:
-```Code
+**Exemplo de Resposta (Output)**
+O TRADER.AI processará o novo preço contra todo o histórico real carregado e retornará a decisão:
+
+```json
 {
 	"decision": "VENDA FORTE",
 	"analysis": {
-		"rsi": 78.5,
+		"rsi": 88.5,
 		"bollinger_position": "UPPER_BAND_BREAKOUT",
-		"macd_signal": "BEARISH_CROSSOVER",
-		"trend": "BULLISH (Price > EMA200)"
+		"macd_signal": "BULLISH",
+		"trend": "BULLISH (Price > EMA200)",
+        "close_price": 95000.0,
+        "ema_200": 93826.81
 	},
-	"timestamp": "2026-01-05T21:45:00",
-	"message": "O ativo está sobrecomprado (RSI > 70) e rompeu a Banda Superior. Probabilidade alta de correção."
+	"timestamp": "2026-03-05T20:45:00"
 }
 ```
 
-##
+---
 
 ## 📅 Roadmap de Desenvolvimento
+
 O desenvolvimento do TRADER.AI segue um cronograma incremental:
 
-* [x]  Etapa 1: Arquitetura Base, API e Estratégia de Confluência (Mock Data).
-
-- [ ]  Etapa 2: Integração com Dataset Histórico Real (Backtesting com dados CSV/Parquet).
-
-* [ ]  Etapa 3: Conexão com API Binance (Leitura de mercado em Tempo Real).
-
-- [ ]  Etapa 4: Execução de Ordens (Live Trading e Gestão de Risco Automatizada).
+* [x] **Etapa 1:** Arquitetura Base, API e Estratégia de Confluência.
+* [x] **Etapa 2:** Integração com Dataset Histórico Real e ETL Multi-Moedas automatizado.
+* [ ] **Etapa 3:** Conexão com API Binance (Leitura de mercado em Tempo Real).
+* [ ] **Etapa 4:** Execução de Ordens (Live Trading e Gestão de Risco Automatizada).
 
 ## ✒️ Autor
+
 Desenvolvido por **Filipe Spirlandeli Junqueira**.
 
-##
+---
 
-```text
-Este projeto é estritamente educacional e experimental. O autor não se responsabiliza por perdas financeiras decorrentes do uso deste software em contas reais.
-```
+> Este projeto é estritamente educacional e experimental. O autor não se responsabiliza por perdas financeiras decorrentes do uso deste software em contas reais.
