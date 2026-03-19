@@ -6,3 +6,4 @@ numpy
 pyarrow
 python-dotenv
 requests
+python-binance
