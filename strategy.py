@@ -79,17 +79,43 @@ class TechnicalAnalysis:
         
         decision = "NEUTRO"
         
-        # Lógica de CONFLUÊNCIA
+        # Lógica de CONFLUÊNCIA (Sistema de Scoring)
+        buy_score = 0
+        sell_score = 0
         
-        # Sinal de COMPRA (Forte)
-        # RSI < 30 E Preço < Banda Inferior E MACD Hist > anterior (momentum aumentando)
-        if (rsi < 30) and (close_price < bb_lower) and (macd_hist > prev_macd_hist):
-            decision = "COMPRA FORTE"
+        # 1. Avaliação do RSI
+        if rsi < 30:
+            buy_score += 40
+        elif rsi < 40:
+            buy_score += 20
             
-        # Sinal de VENDA (Forte)
-        # RSI > 70 E Preço > Banda Superior
-        elif (rsi > 70) and (close_price > bb_upper):
-            decision = "VENDA FORTE"
+        if rsi > 75:
+            sell_score += 40
+        elif rsi > 65:
+            sell_score += 20
+            
+        # 2. Avaliação de Bollinger Bands
+        if close_price <= bb_lower:
+            buy_score += 35
+            
+        if close_price >= bb_upper:
+            sell_score += 35
+            
+        # 3. Avaliação do Histograma MACD
+        if macd_hist > prev_macd_hist:
+            buy_score += 25
+        elif macd_hist < prev_macd_hist:
+            sell_score += 25
+            
+        # 4. Matriz de Decisão Dinâmica
+        if buy_score >= 85:
+            decision = "COMPRA_FORTE"
+        elif buy_score >= 60:
+            decision = "COMPRA_MODERADA"
+        elif buy_score >= 45:
+            decision = "COMPRA_LEVE"
+        elif sell_score >= 60:
+            decision = "VENDA_FORTE"
             
         # Preparar dados de análise para retorno
         trend = "BULLISH (Price > EMA200)" if close_price > ema_200 else "BEARISH (Price < EMA200)"
@@ -106,6 +132,8 @@ class TechnicalAnalysis:
             "decision": decision,
             "analysis": {
                 "rsi": round(rsi, 2),
+                "buy_score": buy_score,
+                "sell_score": sell_score,
                 "bollinger_position": bollinger_position,
                 "macd_signal": macd_signal,
                 "macd_hist_change": "INCREASING" if macd_hist > prev_macd_hist else "DECREASING",
