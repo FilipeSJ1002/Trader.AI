@@ -5,7 +5,6 @@ from main import PriceInput, analisar_mercado, startup_event
 import asyncio
 import sys
 
-# Test Mock Data
 print("--- [VERIFY] Mock Data ---")
 df = generate_mock_data(n_candles=300)
 print(f"Candles generated: {len(df)}")
@@ -17,7 +16,6 @@ if 'close' not in df.columns:
     sys.exit(1)
 print("PASS: Mock Data generation")
 
-# Test Strategy
 print("\n--- [VERIFY] Strategy ---")
 ta_engine = TechnicalAnalysis()
 try:
@@ -37,7 +35,6 @@ except Exception as e:
     traceback.print_exc()
     sys.exit(1)
 
-# Test API Flow (Simulated)
 print("\n--- [VERIFY] API Flow ---")
 async def test_api():
     await startup_event()

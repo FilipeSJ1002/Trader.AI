@@ -5,11 +5,9 @@ from dotenv import load_dotenv
 from binance.client import Client
 from binance.exceptions import BinanceAPIException
 
-# Configuração de Logs
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Configuração inicial
 load_dotenv()
 API_KEY = os.getenv("BINANCE_API_KEY")
 SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
@@ -17,14 +15,12 @@ SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
 if not API_KEY or not SECRET_KEY:
     raise ValueError("Chaves de API ausentes no .env!")
 
-# Inicialização do Cliente Binance na Testnet
 try:
     client = Client(API_KEY, SECRET_KEY, testnet=True)
 except Exception as e:
     logger.error(f"Erro ao conectar na Binance Testnet: {e}")
     client = None
 
-# Gerenciamento de Estado de Conta
 POSITION_STATE = {"qty": 0.0, "avg_price": 0.0}
 SYMBOL = 'BTCUSDT'
 
@@ -42,7 +38,6 @@ def sync_position_state():
         if btc_balance > 0.001:
             POSITION_STATE["qty"] = btc_balance
             
-            # Buscar avg_price de trades recentes
             trades = client.get_my_trades(symbol=SYMBOL, limit=5)
             buyer_trades = [t for t in trades if t['isBuyer']]
             
@@ -63,7 +58,6 @@ def sync_position_state():
     except Exception as e:
         logger.error(f"[SYNC ERRO INESPERADO] {str(e)}")
 
-# Executa sincronização inicial no momento em que o módulo é importado/executado
 sync_position_state()
 
 def _arredondar_fracao(quantidade: float, decimais: int = 5) -> float:
@@ -82,32 +76,25 @@ async def execute_trade(decision: str, current_price: float, peso: float = 1.0):
         return
 
     try:
-        # Lógica de COMPRA
         if decision.startswith("COMPRA_"):
             logger.info(f"[EXECUTION] Iniciando processo de {decision}... (Peso: {peso})")
             
-            # Consulta saldo de USDT
             usdt_balance = float(client.get_asset_balance(asset='USDT')['free'])
             
-            # Utiliza saldo com base no peso para escalar as compras fracionadas
             usdt_utilizado = (usdt_balance * 0.90) * peso
             
-            # Calcula a quantidade de BTC com base no preço atual
             qty_btc = usdt_utilizado / current_price
-            qty_btc = _arredondar_fracao(qty_btc, 5) # Arredonda para 5 casas decimais (LOT_SIZE seguro para BTC)
+            qty_btc = _arredondar_fracao(qty_btc, 5)
             
-            # Proteção contra ordens de tamanho insignificante e lote mínimo da Binance (~11 USDT)
             if usdt_utilizado < 11.0 or qty_btc <= 0:
                 logger.warning(f"[EXECUTION] Compra ignorada: Saldo de USDT alocado ({usdt_utilizado:.2f}) é menor que o lote mínimo exigido pela Binance (~11.00 USDT).")
                 return
 
-            # Envia Ordem de Compra a Mercado
             order = client.order_market_buy(
                 symbol=SYMBOL,
                 quantity=qty_btc
             )
             
-            # Atualiza o estado da Carteira com a fórmula do Preço Médio Ponderado
             qtd_antiga = POSITION_STATE["qty"]
             preco_antigo = POSITION_STATE["avg_price"]
             
@@ -122,7 +109,6 @@ async def execute_trade(decision: str, current_price: float, peso: float = 1.0):
             print(f"[EXECUTION] 🟢 COMPRA EXECUTADA ({decision}) | Quantidade: {qty_btc} BTC | Novo Preço Médio Ponderado: ${POSITION_STATE['avg_price']:.2f}")
             logger.info(f"Comprou com Sucesso! Order ID: {order.get('orderId')} | Status: {order.get('status')}")
 
-        # Lógica de VENDA
         elif decision == "VENDA_FORTE":
             if POSITION_STATE["qty"] <= 0:
                 logger.info("[EXECUTION] Venda ignorada: Sinal de VENDA detectado, mas não há saldo de BTC em carteira.")
@@ -130,29 +116,25 @@ async def execute_trade(decision: str, current_price: float, peso: float = 1.0):
                 
             logger.info("[EXECUTION] Iniciando processo de VENDA...")
             
-            # Break-Even Protector (Protetor de Taxas)
             preco_minimo_venda = POSITION_STATE["avg_price"] * 1.0025
             if current_price < preco_minimo_venda:
                 logger.warning(f"[EXECUTION] Venda Bloqueada: Preço atual (${current_price:.2f}) não cobre o Preço Médio (${POSITION_STATE['avg_price']:.2f}) + Taxas.")
                 return
             
-            # Consulta saldo total de BTC
             btc_balance = float(client.get_asset_balance(asset='BTC')['free'])
-            btc_qty = _arredondar_fracao(btc_balance, 5) # Vende 100% possível (LOT_SIZE)
+            btc_qty = _arredondar_fracao(btc_balance, 5)
             
             if btc_qty <= 0:
                  logger.warning(f"[EXECUTION] Saldo de BTC muito baixo ou insuficiente para venda. Saldo BTC: {btc_balance:.5f}")
-                 POSITION_STATE["qty"] = 0.0 # Ajusta o estado se estiver dessincronizado
+                 POSITION_STATE["qty"] = 0.0
                  POSITION_STATE["avg_price"] = 0.0
                  return
             
-            # Envia Ordem de Venda a Mercado
             order = client.order_market_sell(
                 symbol=SYMBOL,
                 quantity=btc_qty
             )
             
-            # Atualiza o estado
             POSITION_STATE["qty"] = 0.0
             POSITION_STATE["avg_price"] = 0.0
             

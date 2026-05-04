@@ -20,15 +20,12 @@ def load_historical_data(file_path: str = None, n_candles: int = 10000) -> pd.Da
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Arquivo de dados não encontrado: {file_path}")
         
-    # Ler o arquivo parquet
     df = pd.read_parquet(file_path)
     
-    # Garantir que a coluna 'date' seja o índice
     if 'date' in df.columns:
         df['date'] = pd.to_datetime(df['date'])
         df.set_index('date', inplace=True)
     
-    # Manter apenas os últimos n_candles para performance
     if len(df) > n_candles:
         df = df.tail(n_candles)
         

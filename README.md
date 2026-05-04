@@ -1,5 +1,5 @@
 
-# 📈 TRADER.AI
+#  TRADER.AI
 
 > **Sistema de Trading Algorítmico Autônomo Baseado em Análise Técnica Quantitativa.**
 >
@@ -13,7 +13,7 @@
 
 ---
 
-## 📖 Visão Geral do Projeto
+##  Visão Geral do Projeto
 
 O **TRADER.AI** é uma solução de software desenvolvida para automatizar o processo de tomada de decisão no mercado de criptoativos. 
 
@@ -23,7 +23,7 @@ Atualmente, o projeto encontra-se na **Fase 4**, marcando sua transição final 
 
 ---
 
-## 🚀 Funcionalidades da Etapa 4
+##  Funcionalidades da Etapa 4
 
 Nesta quarta etapa, a inteligência artificial adquiriu autonomia operacional para atuar de forma ativa no mercado através da execução automatizada de ordens:
 
@@ -34,7 +34,7 @@ Nesta quarta etapa, a inteligência artificial adquiriu autonomia operacional pa
 
 ---
 
-## 📂 Estrutura do Projeto
+##  Estrutura do Projeto
 
 A organização do código segue rigorosamente os padrões de *Clean Code* e separação de responsabilidades:
 
@@ -57,7 +57,7 @@ Trader.AI/
 
 ---
 
-## 💻 Instalação e Execução
+##  Instalação e Execução
 
 Siga os passos abaixo para preparar a infraestrutura do sistema.
 
@@ -101,7 +101,7 @@ pip install -r requirements.txt
 
 ---
 
-## ⚙️ Alimentando a Memória Inicial (ETL)
+## Alimentando a Memória Inicial (ETL)
 
 Antes de iniciar a escuta em tempo real, o sistema precisa carregar o passado para ter contexto matemático.
 
@@ -117,7 +117,7 @@ python processar_dados.py
 
 ---
 
-## 🧪 Como Rodar a Inteligência em Tempo Real
+##  Como Rodar a Inteligência em Tempo Real
 
 Com os dados base processados, inicie a aplicação principal:
 
@@ -125,13 +125,13 @@ Com os dados base processados, inicie a aplicação principal:
 uvicorn main:app --reload
 ```
 
-✅ **Comportamento Esperado:**
+**Comportamento Esperado:**
 1. O servidor carregará o arquivo Parquet na memória RAM (`market_state.py`).
 2. O servidor REST ficará disponível em `http://127.0.0.1:8000`.
 3. O WebSocket iniciará em segundo plano. Assim que o relógio virar o minuto, você verá as decisões do sistema brotando automaticamente no terminal, e quaisquer execuções de live trading configuradas atuarão de imediato:
-   `[TRADER.AI] 📊 Preço: $74434.37 | RSI: 65.20 | Decisão: NEUTRO`
+   `[TRADER.AI]  Preço: $74434.37 | RSI: 65.20 | Decisão: NEUTRO`
 
-### 💰 Verificando o Saldo da Conta
+###  Verificando o Saldo da Conta
 Para confirmar se a sua conexão com a Binance Testnet foi bem sucedida e acompanhar seu saldo antes e depois do bot operar, você pode rodar (inclusive em outro terminal) o comando utilitário:
 
 ```bash
@@ -142,7 +142,7 @@ python teste_saldo.py
 
 ---
 
-## 📅 Roadmap de Desenvolvimento
+##  Roadmap de Desenvolvimento
 
 O desenvolvimento do TRADER.AI segue um cronograma incremental:
 
@@ -153,7 +153,7 @@ O desenvolvimento do TRADER.AI segue um cronograma incremental:
 
 ---
 
-## ✒️ Autor
+## Autor
 
 Desenvolvido por **Filipe Spirlandeli Junqueira**.
 

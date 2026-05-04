@@ -1,7 +1,6 @@
 import os
 from dotenv import load_dotenv
 
-# Carrega as variáveis de ambiente do arquivo .env
 load_dotenv()
 
 from fastapi import FastAPI, HTTPException
@@ -26,14 +25,12 @@ async def startup_event():
         market_state.set_historical_data(df_hist)
         print(f"Setup concluído. Total de candles: {len(market_state.history_data)}")
         
-        # Iniciar a conexão WebSocket em background para não bloquear o event loop
         import asyncio
         from binance_stream import start_stream
         asyncio.create_task(start_stream())
         
     except Exception as e:
         print(f"Erro fatal ao carregar dados: {e}")
-        # Em produção, poderíamos impedir o startup, mas aqui apenas logamos
         pass
 
 @app.post("/analisar_mercado")
@@ -44,7 +41,6 @@ async def analisar_mercado(input_data: PriceInput):
     if market_state.history_data.empty:
         raise HTTPException(status_code=503, detail="Dados históricos não carregados.")
 
-    # Criar novo candle simulando a mesma abertura/max/min do close
     new_candle = {
         "date": datetime.now(),
         "open": input_data.price,

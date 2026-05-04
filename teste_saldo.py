@@ -4,10 +4,8 @@ from binance.client import Client
 from binance.exceptions import BinanceAPIException
 
 def testar_saldo_testnet():
-    # Carrega as variáveis de ambiente do arquivo .env
     load_dotenv()
 
-    # Obtém as chaves de API
     api_key = os.getenv("BINANCE_API_KEY")
     secret_key = os.getenv("BINANCE_SECRET_KEY")
 
@@ -19,17 +17,14 @@ def testar_saldo_testnet():
     print("Iniciando conexão com a Binance Testnet...")
     
     try:
-        # Inicializa o cliente com modo testnet ativado OBRIGATORIAMENTE
         client = Client(api_key, secret_key, testnet=True)
         
-        # Faz a chamada para obter informações da conta
         account = client.get_account()
         balances = account.get('balances', [])
         
         print("\n=== SALDOS DISPONÍVEIS (Testnet) ===")
         ativos_encontrados = False
         
-        # Itera sobre os saldos e imprime APENAS USDT e BTC maiores que zero
         for balance in balances:
             asset = balance['asset']
             if asset in ['BTC', 'USDT']:
@@ -40,7 +35,7 @@ def testar_saldo_testnet():
                 if total_balance > 0:
                     ativos_encontrados = True
                     # Formata a string de forma limpa e profissional
-                    print(f"💰 {asset}:")
+                    print(f"{asset}:")
                     print(f"   ► Livre:  {free_balance:.8f}")
                     print(f"   ► Bloq:   {locked_balance:.8f}")
                     print(f"   ► Total:  {total_balance:.8f}\n")

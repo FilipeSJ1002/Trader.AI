@@ -32,7 +32,6 @@ def test_strategy(df):
 
     strategy = TechnicalAnalysis()
     try:
-        # Test with the loaded dataframe
         result = strategy.analisar_compra_venda(df.copy())
         print("Success! Strategy executed without error.")
         print(f"Decision: {result['decision']}")
@@ -43,11 +42,8 @@ def test_strategy(df):
         traceback.print_exc()
 
 def main():
-    # Ensure raw data file exists (in case the user hasn't actually put it there yet, catch it)
     if not os.path.exists("data/BTCUSDT_real_1m_2022_2025.parquet"):
         print("WARNING: Data file not found at data/BTCUSDT_real_1m_2022_2025.parquet")
-        # Creating a dummy file for verification if it doesn't exist? 
-        # No, the user said "O arquivo está salvo em ...". So I expect it to be there.
         return
 
     df = test_data_loader()

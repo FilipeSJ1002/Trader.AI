@@ -22,7 +22,6 @@ def get_latest_downloaded_month(folder_path: str, symbol: str) -> tuple[int, int
     latest_year = 2021
     latest_month = 12
 
-    # Padrão esperado do nome do arquivo (ex: BTCUSDT-1m-2025-12.csv)
     pattern = re.compile(rf"^{symbol}-1m-(?P<year>\d{{4}})-(?P<month>\d{{2}})\.csv$")
 
     has_files = False
@@ -56,7 +55,6 @@ def run_etl():
     }
 
     current_date = datetime.now()
-    # O limite é o mês anterior ao atual
     if current_date.month == 1:
         target_year = current_date.year - 1
         target_month = 12
@@ -72,7 +70,6 @@ def run_etl():
         
         last_y, last_m = get_latest_downloaded_month(folder, symbol)
         
-        # Calcular o próximo mês a ser baixado
         if last_m == 12:
             curr_y = last_y + 1
             curr_m = 1
@@ -85,7 +82,6 @@ def run_etl():
         else:
             print(f"Último arquivo encontrado: {last_y}-{last_m:02d}. Iniciando download em {curr_y}-{curr_m:02d}.")
 
-        # Iterar mês a mês até a data alvo
         while (curr_y < target_year) or (curr_y == target_year and curr_m <= target_month):
             year_str = str(curr_y)
             month_str = f"{curr_m:02d}"
@@ -99,11 +95,9 @@ def run_etl():
                 if response.status_code == 200:
                     try:
                         with zipfile.ZipFile(io.BytesIO(response.content)) as z:
-                            # Filtra apenas os arquivos CSV
                             csv_files = [f for f in z.namelist() if f.endswith('.csv')]
                             if csv_files:
                                 for csv_file in csv_files:
-                                    # Extrai o arquivo diretamente para a pasta destino
                                     z.extract(csv_file, path=folder)
                                 print(f"  [+] Sucesso! Arquivo extraído em: {folder}")
                             else:
@@ -118,7 +112,6 @@ def run_etl():
             except Exception as e:
                 print(f"  [!] Erro na requisição (timeout/conexão): {e}")
                 
-            # Avançar para o próximo mês
             if curr_m == 12:
                 curr_y += 1
                 curr_m = 1
