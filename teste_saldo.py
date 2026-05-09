@@ -34,7 +34,6 @@ def testar_saldo_testnet():
                 
                 if total_balance > 0:
                     ativos_encontrados = True
-                    # Formata a string de forma limpa e profissional
                     print(f"{asset}:")
                     print(f"   ► Livre:  {free_balance:.8f}")
                     print(f"   ► Bloq:   {locked_balance:.8f}")
