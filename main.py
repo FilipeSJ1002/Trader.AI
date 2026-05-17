@@ -25,6 +25,25 @@ async def startup_event():
         market_state.set_historical_data(df_hist)
         print(f"Setup concluído. Total de candles: {len(market_state.history_data)}")
         
+        # Carregar 4H
+        from binance.client import Client
+        import os
+        api_key = os.getenv("BINANCE_API_KEY")
+        secret = os.getenv("BINANCE_SECRET_KEY")
+        if api_key and secret:
+            client = Client(api_key, secret, testnet=True)
+            print("Carregando histórico 4H da Binance...")
+            klines_4h = client.get_historical_klines("BTCUSDT", Client.KLINE_INTERVAL_4HOUR, "30 days ago UTC")
+            df_4h = pd.DataFrame(klines_4h, columns=['t', 'o', 'h', 'l', 'c', 'v', 'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'])
+            df_4h['date'] = pd.to_datetime(df_4h['t'], unit='ms')
+            df_4h.set_index('date', inplace=True)
+            for col in ['o', 'h', 'l', 'c', 'v']:
+                df_4h[col] = df_4h[col].astype(float)
+            df_4h = df_4h[['o', 'h', 'l', 'c', 'v']]
+            df_4h.rename(columns={'o': 'open', 'h': 'high', 'l': 'low', 'c': 'close', 'v': 'volume'}, inplace=True)
+            market_state.set_historical_4h_data(df_4h)
+            print(f"Histórico 4H carregado: {len(df_4h)} candles.")
+        
         import asyncio
         from binance_stream import start_stream
         asyncio.create_task(start_stream())

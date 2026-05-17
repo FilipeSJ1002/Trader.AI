@@ -22,6 +22,9 @@ class TechnicalAnalysis:
         df.ta.ema(length=50, append=True)
         df.ta.ema(length=200, append=True)
         
+        # ATR para volatilidade
+        df.ta.atr(length=14, append=True)
+        
         return df
 
     def analisar_compra_venda(self, df: pd.DataFrame) -> dict:
@@ -42,11 +45,13 @@ class TechnicalAnalysis:
             macd_hist_col = [c for c in cols if c.startswith('MACDh_12_26_9')][0]
             rsi_col = [c for c in cols if c.startswith('RSI_14')][0]
             ema_200_col = [c for c in cols if c.startswith('EMA_200')][0]
+            atr_col = [c for c in cols if c.startswith('ATRr_14')][0]
         except IndexError:
             raise ValueError(f"Indicadores não encontrados. Colunas disponíveis: {cols}")
 
         rsi = last_candle[rsi_col]
         close_price = last_candle['close']
+        atr_value = last_candle[atr_col]
         
         bb_lower = last_candle[bb_lower_col]
         bb_upper = last_candle[bb_upper_col]
@@ -112,7 +117,8 @@ class TechnicalAnalysis:
                 "macd_hist_change": "INCREASING" if macd_hist > prev_macd_hist else "DECREASING",
                 "trend": trend,
                 "close_price": close_price,
-                "ema_200": round(ema_200, 2)
+                "ema_200": round(ema_200, 2),
+                "atr": round(atr_value, 2)
             },
             "timestamp": str(last_candle.name) if hasattr(last_candle, 'name') else str(datetime.now())
         }
