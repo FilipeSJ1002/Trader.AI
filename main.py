@@ -1,48 +1,59 @@
 import os
+import pandas as pd
+from datetime import datetime
 from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+import market_state
 
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-import pandas as pd
-from datetime import datetime
-from data_loader import load_historical_data
-import market_state
-
-app = FastAPI(title="Trader Bot API - Stage 2")
+app = FastAPI(title="Trader Bot API - Multi-Asset Scalping")
 
 class PriceInput(BaseModel):
+    symbol: str
     price: float
     volume: int
 
 @app.on_event("startup")
 async def startup_event():
-    """Inicializa os dados históricos reais ao iniciar a API."""
+    """Inicializa os dados históricos reais ao iniciar a API (Multi-Asset)."""
     try:
-        print("Iniciando carregamento de dados históricos...")
-        df_hist = load_historical_data()
-        market_state.set_historical_data(df_hist)
-        print(f"Setup concluído. Total de candles: {len(market_state.history_data)}")
-        
-        # Carregar 4H
         from binance.client import Client
-        import os
         api_key = os.getenv("BINANCE_API_KEY")
         secret = os.getenv("BINANCE_SECRET_KEY")
-        if api_key and secret:
-            client = Client(api_key, secret, testnet=True)
-            print("Carregando histórico 4H da Binance...")
-            klines_4h = client.get_historical_klines("BTCUSDT", Client.KLINE_INTERVAL_4HOUR, "30 days ago UTC")
-            df_4h = pd.DataFrame(klines_4h, columns=['t', 'o', 'h', 'l', 'c', 'v', 'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'])
-            df_4h['date'] = pd.to_datetime(df_4h['t'], unit='ms')
-            df_4h.set_index('date', inplace=True)
+        
+        if not api_key or not secret:
+            print("Chaves API Binance ausentes. Não foi possível baixar histórico inicial.")
+            return
+            
+        client = Client(api_key, secret, testnet=True)
+        ativos = ["BTCUSDT", "ETHUSDT", "XRPUSDT"]
+        
+        for symbol in ativos:
+            print(f"Carregando histórico 1M para {symbol} da Binance...")
+            klines_1m = client.get_historical_klines(symbol, Client.KLINE_INTERVAL_1MINUTE, "7 days ago UTC")
+            df_1m = pd.DataFrame(klines_1m, columns=['t', 'o', 'h', 'l', 'c', 'v', 'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'])
+            df_1m['date'] = pd.to_datetime(df_1m['t'], unit='ms')
+            df_1m.set_index('date', inplace=True)
             for col in ['o', 'h', 'l', 'c', 'v']:
-                df_4h[col] = df_4h[col].astype(float)
-            df_4h = df_4h[['o', 'h', 'l', 'c', 'v']]
-            df_4h.rename(columns={'o': 'open', 'h': 'high', 'l': 'low', 'c': 'close', 'v': 'volume'}, inplace=True)
-            market_state.set_historical_4h_data(df_4h)
-            print(f"Histórico 4H carregado: {len(df_4h)} candles.")
+                df_1m[col] = df_1m[col].astype(float)
+            df_1m = df_1m[['o', 'h', 'l', 'c', 'v']]
+            df_1m.rename(columns={'o': 'open', 'h': 'high', 'l': 'low', 'c': 'close', 'v': 'volume'}, inplace=True)
+            market_state.set_historical_data(symbol, df_1m)
+            print(f"Histórico 1M carregado para {symbol}: {len(df_1m)} candles.")
+            
+            print(f"Carregando histórico 1H para {symbol} da Binance...")
+            klines_1h = client.get_historical_klines(symbol, Client.KLINE_INTERVAL_1HOUR, "30 days ago UTC")
+            df_1h = pd.DataFrame(klines_1h, columns=['t', 'o', 'h', 'l', 'c', 'v', 'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'])
+            df_1h['date'] = pd.to_datetime(df_1h['t'], unit='ms')
+            df_1h.set_index('date', inplace=True)
+            for col in ['o', 'h', 'l', 'c', 'v']:
+                df_1h[col] = df_1h[col].astype(float)
+            df_1h = df_1h[['o', 'h', 'l', 'c', 'v']]
+            df_1h.rename(columns={'o': 'open', 'h': 'high', 'l': 'low', 'c': 'close', 'v': 'volume'}, inplace=True)
+            market_state.set_historical_1h_data(symbol, df_1h)
+            print(f"Histórico 1H carregado para {symbol}: {len(df_1h)} candles.")
         
         import asyncio
         from binance_stream import start_stream
@@ -57,8 +68,10 @@ async def analisar_mercado(input_data: PriceInput):
     """
     Recebe um novo preço, cria um candle temporário, adiciona ao histórico real e executa a análise.
     """
-    if market_state.history_data.empty:
-        raise HTTPException(status_code=503, detail="Dados históricos não carregados.")
+    symbol = input_data.symbol.upper()
+    
+    if symbol not in market_state.history_data or market_state.history_data[symbol].empty:
+        raise HTTPException(status_code=503, detail=f"Dados históricos não carregados para {symbol}.")
 
     new_candle = {
         "date": datetime.now(),
@@ -70,7 +83,7 @@ async def analisar_mercado(input_data: PriceInput):
     }
     
     try:
-        resultado = market_state.append_new_candle(new_candle)
+        resultado = market_state.append_new_candle(symbol, new_candle)
         return resultado
     except Exception as e:
         import traceback
@@ -81,6 +94,5 @@ async def analisar_mercado(input_data: PriceInput):
 def status():
     return {
         "status": "ok", 
-        "candles_count": len(market_state.history_data),
-        "last_candle_date": str(market_state.history_data.index[-1]) if not market_state.history_data.empty else None
+        "symbols_tracked": list(market_state.history_data.keys())
     }

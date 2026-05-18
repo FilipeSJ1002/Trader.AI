@@ -12,6 +12,12 @@ async def start_stream():
     Inicia o stream de conexão assíncrona com o WebSocket da Binance.
     Implementa um loop robusto de Auto-Reconnect em caso de desconexão.
     """
+    streams = [
+        'btcusdt@kline_1m', 'btcusdt@kline_1h',
+        'ethusdt@kline_1m', 'ethusdt@kline_1h',
+        'xrpusdt@kline_1m', 'xrpusdt@kline_1h'
+    ]
+    
     while True:
         client = None
         try:
@@ -19,7 +25,7 @@ async def start_stream():
             client = await AsyncClient.create()
             bm = BinanceSocketManager(client)
             
-            stream = bm.multiplex_socket(['btcusdt@kline_1m', 'btcusdt@kline_4h'])
+            stream = bm.multiplex_socket(streams)
             
             async with stream as ts:
                 print("✅ Conexão WebSocket (Multiplex) estabelecida com sucesso! Aguardando velas...")
@@ -34,10 +40,12 @@ async def start_stream():
                         stream_name = res['stream']
                         vela = res['data']['k']
                         
-                        if stream_name == 'btcusdt@kline_4h':
+                        symbol = stream_name.split('@')[0].upper()
+                        
+                        if stream_name.endswith('@kline_1h'):
                             if vela['x']:
                                 candle_time = pd.to_datetime(vela['t'], unit='ms')
-                                new_4h = {
+                                new_mtf = {
                                     "date": candle_time,
                                     "open": float(vela['o']),
                                     "high": float(vela['h']),
@@ -45,9 +53,9 @@ async def start_stream():
                                     "close": float(vela['c']),
                                     "volume": float(vela['v'])
                                 }
-                                market_state.update_4h_candle(new_4h)
+                                market_state.update_1h_candle(symbol, new_mtf)
                                 
-                        elif stream_name == 'btcusdt@kline_1m':
+                        elif stream_name.endswith('@kline_1m'):
                             if vela['x']:
                                 candle_time = pd.to_datetime(vela['t'], unit='ms')
                                 preco_abertura = float(vela['o'])
@@ -65,7 +73,7 @@ async def start_stream():
                                     "volume": volume
                                 }
                                 
-                                analysis = market_state.append_new_candle(new_candle)
+                                analysis = market_state.append_new_candle(symbol, new_candle)
                                 decision = analysis["decision"]
                                 
                                 analise_dados = analysis.get("analysis", {})
@@ -75,9 +83,9 @@ async def start_stream():
                                 htf_weakness = analise_dados.get("htf_weakness", False)
                                 atr = analise_dados.get("atr", 0.0)
                                 
-                                print(f"[TRADER.AI]  Preço: ${preco_fechamento:.2f} | RSI: {rsi} | ATR: {atr:.2f} | Score C: {buy_score} | Decisão: {decision} | MTF Fraqueza: {htf_weakness}")
+                                print(f"[TRADER.AI] {symbol} | Preço: ${preco_fechamento:.4f} | RSI: {rsi} | ATR: {atr:.4f} | Score C: {buy_score} | Decisão: {decision} | MTF Fraqueza: {htf_weakness}")
                                 
-                                await check_risk_management(preco_fechamento, candle_time)
+                                await check_risk_management(symbol, preco_fechamento, candle_time)
                                 
                                 if decision.startswith("COMPRA_"):
                                     pesos = {
@@ -86,9 +94,9 @@ async def start_stream():
                                         "COMPRA_FORTE": 1.0
                                     }
                                     peso = pesos.get(decision, 1.0)
-                                    await execute_trade(decision, preco_fechamento, peso, atr)
+                                    await execute_trade(symbol, decision, preco_fechamento, peso, atr)
                                 elif decision == "VENDA_FORTE":
-                                    await execute_trade(decision, preco_fechamento, 1.0, atr)
+                                    await execute_trade(symbol, decision, preco_fechamento, 1.0, atr)
                                 
                     except Exception as loop_e:
                         logger.error(f"Falha ao processar dados da vela/sinais: {loop_e}")
