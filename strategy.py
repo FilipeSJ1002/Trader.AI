@@ -4,6 +4,7 @@ import pandas_ta as ta
 from datetime import datetime
 import joblib
 import logging
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -21,9 +22,6 @@ class TechnicalAnalysis:
             logger.error(f"❌ Erro ao carregar o modelo de ML: {e}")
 
     def add_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Adiciona indicadores técnicos ao DataFrame.
-        """
         if not isinstance(df.index, pd.DatetimeIndex):
             if 'timestamp' in df.columns:
                 df.set_index('timestamp', inplace=True)
@@ -35,19 +33,47 @@ class TechnicalAnalysis:
         df.ta.ema(length=200, append=True)
         df.ta.atr(length=14, append=True)
         
-        # ML Features
+        # Feature Eng Nível 2 e Aceleração
+        df.ta.obv(append=True)
+        df.ta.vwap(append=True)
+        df.ta.roc(length=5, append=True)
+        df.ta.roc(length=15, append=True)
+        
         df['ret_1'] = df['close'].pct_change(1)
         df['ret_2'] = df['close'].pct_change(2)
         df['ret_3'] = df['close'].pct_change(3)
         
+        df['Body_Size'] = abs(df['close'] - df['open']) / df['close']
+        df['Upper_Wick'] = df['high'] - np.maximum(df['open'], df['close'])
+        df['Lower_Wick'] = np.minimum(df['open'], df['close']) - df['low']
+        df['Wick_Ratio'] = df['Lower_Wick'] / (df['Upper_Wick'] + 0.00001)
+        
+        cdl = df.ta.cdl_pattern(name=["engulfing", "hammer", "morningstar"])
+        if cdl is not None and isinstance(cdl, pd.DataFrame):
+            for col in ['CDL_ENGULFING', 'CDL_HAMMER', 'CDL_MORNINGSTAR']:
+                if col in cdl.columns and col not in df.columns:
+                    df[col] = cdl[col]
+            
+        for col in ['CDL_ENGULFING', 'CDL_HAMMER', 'CDL_MORNINGSTAR']:
+            if col not in df.columns:
+                df[col] = 0
+            else:
+                df[col] = df[col].fillna(0).astype(int)
+        
+        H1 = df['high'].shift(5).rolling(window=35).max()
+        L1 = df['low'].shift(5).rolling(window=35).min()
+        H2 = df['high'].rolling(window=5).max()
+        cup_depth = (H1 - L1) / H1
+        cup_edges_match = abs(H1 - H2) / H1
+        handle_drop = (H2 - df['close']) / H2
+        
+        cup_cond = (cup_depth > 0.015) & (cup_edges_match < 0.01) & (handle_drop > 0.002) & (handle_drop < 0.01)
+        df['Cup_and_Handle'] = cup_cond.astype(int)
+        
         return df
 
     def analisar_compra_venda(self, df: pd.DataFrame) -> dict:
-        """
-        Executa a lógica de confluência para decisão de trading e filtra via ML.
-        """
         df = self.add_indicators(df)
-        
         last_candle = df.iloc[-1]
         prev_candle = df.iloc[-2]
         
@@ -59,66 +85,66 @@ class TechnicalAnalysis:
             rsi_col = [c for c in cols if c.startswith('RSI_14')][0]
             ema_200_col = [c for c in cols if c.startswith('EMA_200')][0]
             atr_col = [c for c in cols if c.startswith('ATRr_14')][0]
+            obv_col = [c for c in cols if c.startswith('OBV')][0]
+            vwap_col = [c for c in cols if c.startswith('VWAP')][0]
+            roc_5_col = [c for c in cols if c.startswith('ROC_5')][0]
+            roc_15_col = [c for c in cols if c.startswith('ROC_15')][0]
         except IndexError:
             raise ValueError(f"Indicadores não encontrados. Colunas disponíveis: {cols}")
 
         rsi = last_candle[rsi_col]
         close_price = last_candle['close']
         atr_value = last_candle[atr_col]
-        
         bb_lower = last_candle[bb_lower_col]
         bb_upper = last_candle[bb_upper_col]
-        
         macd_hist = last_candle[macd_hist_col]
         prev_macd_hist = prev_candle[macd_hist_col]
-        
         ema_200 = last_candle[ema_200_col]
+        obv_val = last_candle[obv_col]
+        vwap_val = last_candle[vwap_col]
         
         decision = "NEUTRO"
         buy_score = 0
         sell_score = 0
         
-        if rsi < 30:
+        if rsi < 30: buy_score += 40
+        elif rsi < 40: buy_score += 20
+        if rsi > 75: sell_score += 40
+        elif rsi > 65: sell_score += 20
+        if close_price <= bb_lower: buy_score += 35
+        if close_price >= bb_upper: sell_score += 35
+        if macd_hist > prev_macd_hist: buy_score += 25
+        elif macd_hist < prev_macd_hist: sell_score += 25
+        
+        # Bônus de Padrões
+        if last_candle['Cup_and_Handle'] == 1:
             buy_score += 40
-        elif rsi < 40:
-            buy_score += 20
+            logger.info("☕ Padrão Xícara e Alça Detectado!")
+        if last_candle['CDL_ENGULFING'] == 100 or last_candle['CDL_HAMMER'] == 100 or last_candle['CDL_MORNINGSTAR'] == 100:
+            if close_price <= bb_lower * 1.01: # Apenas nos fundos
+                buy_score += 30
+                logger.info("🕯️ Padrão Candlestick de Alta Detectado em suporte!")
             
-        if rsi > 75:
-            sell_score += 40
-        elif rsi > 65:
-            sell_score += 20
+        # Filtro de Tendência (EMA 200)
+        tendencia_alta = close_price > ema_200
+        if not tendencia_alta:
+            buy_score = 0
             
-        if close_price <= bb_lower:
-            buy_score += 35
+        if buy_score >= 85: decision = "COMPRA_FORTE"
+        elif buy_score >= 60: decision = "COMPRA_MODERADA"
+        elif buy_score >= 45: decision = "COMPRA_LEVE"
+        elif sell_score >= 60: decision = "VENDA_FORTE"
             
-        if close_price >= bb_upper:
-            sell_score += 35
-            
-        if macd_hist > prev_macd_hist:
-            buy_score += 25
-        elif macd_hist < prev_macd_hist:
-            sell_score += 25
-            
-        if buy_score >= 85:
-            decision = "COMPRA_FORTE"
-        elif buy_score >= 60:
-            decision = "COMPRA_MODERADA"
-        elif buy_score >= 45:
-            decision = "COMPRA_LEVE"
-        elif sell_score >= 60:
-            decision = "VENDA_FORTE"
-            
-        ml_prob = 0.0
+        ml_prob_success = 0.0
+        ml_prob_fail = 0.0
         ml_status = "NOT_EVALUATED"
 
-        # INFERÊNCIA DE MACHINE LEARNING (FILTRO)
-        if decision in ["COMPRA_FORTE", "COMPRA_MODERADA"] and self.model is not None:
+        if self.model is not None:
             try:
-                # Extrai features exatas que o modelo aprendeu
                 dist_bbu = (close_price - bb_upper) / close_price
                 dist_bbl = (close_price - bb_lower) / close_price
+                atr_pct = atr_value / close_price
                 
-                # ['RSI', 'MACDh', 'ATR', 'Dist_BBU', 'Dist_BBL', 'ret_1', 'ret_2', 'ret_3']
                 X_last = pd.DataFrame([{
                     'RSI': rsi,
                     'MACDh': macd_hist,
@@ -127,45 +153,62 @@ class TechnicalAnalysis:
                     'Dist_BBL': dist_bbl,
                     'ret_1': last_candle['ret_1'],
                     'ret_2': last_candle['ret_2'],
-                    'ret_3': last_candle['ret_3']
+                    'ret_3': last_candle['ret_3'],
+                    'OBV': obv_val,
+                    'VWAP': vwap_val,
+                    'ATR_pct': atr_pct,
+                    'ROC_5': last_candle[roc_5_col],
+                    'ROC_15': last_candle[roc_15_col],
+                    'Body_Size': last_candle['Body_Size'],
+                    'Upper_Wick': last_candle['Upper_Wick'],
+                    'Lower_Wick': last_candle['Lower_Wick'],
+                    'Wick_Ratio': last_candle['Wick_Ratio'],
+                    'CDL_ENGULFING': last_candle['CDL_ENGULFING'],
+                    'CDL_HAMMER': last_candle['CDL_HAMMER'],
+                    'CDL_MORNINGSTAR': last_candle['CDL_MORNINGSTAR'],
+                    'Cup_and_Handle': last_candle['Cup_and_Handle']
                 }])
                 
                 proba = self.model.predict_proba(X_last)
-                ml_prob = proba[0][1] # Probabilidade de ser 1 (Sucesso)
+                ml_prob_fail = proba[0][0]
+                ml_prob_success = proba[0][1]
                 
-                if ml_prob < 0.60:
-                    ml_status = "REJECTED"
-                    decision = "COMPRA_BLOQUEADA_POR_ML"
-                else:
-                    ml_status = "APPROVED"
+                # Defesa Ativa: Mapeamento de Probabilidade Inversa
+                if ml_prob_fail > 0.95:
+                    decision = "VENDA_FORTE"
+                    ml_status = "DEFENSE_ACTIVE_STRONG"
+                elif ml_prob_fail > 0.92:
+                    decision = "VENDA_MODERADA"
+                    ml_status = "DEFENSE_ACTIVE_MODERATE"
+                elif ml_prob_fail > 0.85:
+                    decision = "VENDA_LEVE"
+                    ml_status = "DEFENSE_ACTIVE_LIGHT"
+                
+                # Filtro de Compra se ainda for COMPRA
+                elif decision in ["COMPRA_FORTE", "COMPRA_MODERADA"]:
+                    if atr_pct <= 0.003:
+                        decision = "COMPRA_BLOQUEADA_BAIXA_VOLATILIDADE"
+                        ml_status = "REJECTED_LOW_VOL"
+                    elif ml_prob_success < 0.60:
+                        decision = "COMPRA_BLOQUEADA_POR_ML"
+                        ml_status = "REJECTED_BUY"
+                    else:
+                        ml_status = "APPROVED_BUY"
+                        
             except Exception as e:
                 logger.error(f"Erro ao inferir ML: {e}")
                 ml_status = "ERROR"
 
-        trend = "BULLISH (Price > EMA200)" if close_price > ema_200 else "BEARISH (Price < EMA200)"
-        
-        bollinger_position = "INSIDE_BANDS"
-        if close_price > bb_upper:
-            bollinger_position = "UPPER_BAND_BREAKOUT"
-        elif close_price < bb_lower:
-            bollinger_position = "LOWER_BAND_BREAKOUT"
-            
-        macd_signal = "BULLISH" if macd_hist > 0 else "BEARISH"
-        
         return {
             "decision": decision,
             "analysis": {
                 "rsi": round(rsi, 2),
                 "buy_score": buy_score,
                 "sell_score": sell_score,
-                "bollinger_position": bollinger_position,
-                "macd_signal": macd_signal,
-                "macd_hist_change": "INCREASING" if macd_hist > prev_macd_hist else "DECREASING",
-                "trend": trend,
                 "close_price": close_price,
-                "ema_200": round(ema_200, 2),
                 "atr": round(atr_value, 2),
-                "ml_probability": round(ml_prob, 4),
+                "ml_prob_success": round(ml_prob_success, 4),
+                "ml_prob_fail": round(ml_prob_fail, 4),
                 "ml_status": ml_status
             },
             "timestamp": str(last_candle.name) if hasattr(last_candle, 'name') else str(datetime.now())

@@ -7,6 +7,7 @@ import pandas_ta as ta
 history_data = {}
 history_1h = {}
 htf_weakness = {}
+daily_returns = {}
 strategy = TechnicalAnalysis()
 
 def set_historical_data(symbol: str, df: pd.DataFrame):
@@ -38,6 +39,13 @@ def update_1h_candle(symbol: str, candle: dict):
     
     if len(history_1h[symbol]) > 200:
         history_1h[symbol] = history_1h[symbol].tail(200)
+        
+    # Calcular Força Relativa (Daily Return)
+    if len(history_1h[symbol]) > 0:
+        lookback = 24 if len(history_1h[symbol]) >= 24 else len(history_1h[symbol])
+        primeiro_1h = history_1h[symbol].iloc[-lookback]
+        ultimo_1h = history_1h[symbol].iloc[-1]
+        daily_returns[symbol] = (ultimo_1h['close'] - primeiro_1h['close']) / primeiro_1h['close']
         
     if len(history_1h[symbol]) < 30:
         htf_weakness[symbol] = False
@@ -94,6 +102,20 @@ def append_new_candle(symbol: str, candle: dict) -> dict:
     weakness = htf_weakness.get(symbol, False)
     if weakness and resultado.get("decision", "").startswith("COMPRA_"):
         resultado["decision"] = "BLOQUEADO_POR_HTF"
+        
+    # Relative Strength Bônus e Punição
+    if daily_returns:
+        max_symbol = max(daily_returns, key=lambda k: daily_returns[k])
+        if symbol == max_symbol and daily_returns[symbol] > 0:
+            resultado["analysis"]["asset_strength"] = "STRONG"
+            if resultado.get("decision", "") == "COMPRA_MODERADA":
+                resultado["decision"] = "COMPRA_FORTE"  # Foca no cavalo mais rápido
+        elif daily_returns.get(symbol, 0) < 0 and symbol != max_symbol:
+            resultado["analysis"]["asset_strength"] = "WEAK"
+            if resultado.get("decision", "").startswith("COMPRA_"):
+                resultado["decision"] = "BLOQUEADA_POR_FORÇA_RELATIVA_FRACA" # Não opera a moeda fraca
+        else:
+            resultado["analysis"]["asset_strength"] = "NEUTRAL"
         
     if "analysis" in resultado:
         resultado["analysis"]["htf_weakness"] = weakness

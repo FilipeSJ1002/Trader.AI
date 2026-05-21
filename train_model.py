@@ -5,6 +5,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, accuracy_score
 import joblib
 from dotenv import load_dotenv
+import numpy as np
 
 def create_features_and_target(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -20,10 +21,41 @@ def create_features_and_target(df: pd.DataFrame) -> pd.DataFrame:
     df.ta.macd(fast=12, slow=26, signal=9, append=True)
     df.ta.bbands(length=20, std=2, append=True)
     df.ta.atr(length=14, append=True)
+    df.ta.obv(append=True)
+    df.ta.vwap(append=True)
+    df.ta.roc(length=5, append=True)
+    df.ta.roc(length=15, append=True)
     
     df['ret_1'] = df['close'].pct_change(1)
     df['ret_2'] = df['close'].pct_change(2)
     df['ret_3'] = df['close'].pct_change(3)
+    
+    df['Body_Size'] = abs(df['close'] - df['open']) / df['close']
+    df['Upper_Wick'] = df['high'] - np.maximum(df['open'], df['close'])
+    df['Lower_Wick'] = np.minimum(df['open'], df['close']) - df['low']
+    df['Wick_Ratio'] = df['Lower_Wick'] / (df['Upper_Wick'] + 0.00001)
+    
+    cdl = df.ta.cdl_pattern(name=["engulfing", "hammer", "morningstar"])
+    if cdl is not None and isinstance(cdl, pd.DataFrame):
+        for col in ['CDL_ENGULFING', 'CDL_HAMMER', 'CDL_MORNINGSTAR']:
+            if col in cdl.columns and col not in df.columns:
+                df[col] = cdl[col]
+        
+    for col in ['CDL_ENGULFING', 'CDL_HAMMER', 'CDL_MORNINGSTAR']:
+        if col not in df.columns:
+            df[col] = 0
+        else:
+            df[col] = df[col].fillna(0).astype(int)
+    
+    H1 = df['high'].shift(5).rolling(window=35).max()
+    L1 = df['low'].shift(5).rolling(window=35).min()
+    H2 = df['high'].rolling(window=5).max()
+    cup_depth = (H1 - L1) / H1
+    cup_edges_match = abs(H1 - H2) / H1
+    handle_drop = (H2 - df['close']) / H2
+    
+    cup_cond = (cup_depth > 0.015) & (cup_edges_match < 0.01) & (handle_drop > 0.002) & (handle_drop < 0.01)
+    df['Cup_and_Handle'] = cup_cond.astype(int)
     
     cols = df.columns
     try:
@@ -38,15 +70,31 @@ def create_features_and_target(df: pd.DataFrame) -> pd.DataFrame:
         df['ATR'] = df[atr_col]
         df['Dist_BBU'] = (df['close'] - df[bbu_col]) / df['close']
         df['Dist_BBL'] = (df['close'] - df[bbl_col]) / df['close']
+        
+        obv_col = [c for c in cols if c.startswith('OBV')][0]
+        vwap_col = [c for c in cols if c.startswith('VWAP')][0]
+        roc_5_col = [c for c in cols if c.startswith('ROC_5')][0]
+        roc_15_col = [c for c in cols if c.startswith('ROC_15')][0]
+        
+        df['OBV'] = df[obv_col]
+        df['VWAP'] = df[vwap_col]
+        df['ROC_5'] = df[roc_5_col]
+        df['ROC_15'] = df[roc_15_col]
+        df['ATR_pct'] = df['ATR'] / df['close']
     except Exception as e:
         print(f"Erro ao mapear colunas do pandas_ta: {e}")
         return pd.DataFrame()
 
-    features = ['RSI', 'MACDh', 'ATR', 'Dist_BBU', 'Dist_BBL', 'ret_1', 'ret_2', 'ret_3']
+    features = [
+        'RSI', 'MACDh', 'ATR', 'Dist_BBU', 'Dist_BBL', 'ret_1', 'ret_2', 'ret_3', 
+        'OBV', 'VWAP', 'ATR_pct', 'ROC_5', 'ROC_15', 'Body_Size', 'Upper_Wick', 
+        'Lower_Wick', 'Wick_Ratio', 'CDL_ENGULFING', 'CDL_HAMMER', 
+        'CDL_MORNINGSTAR', 'Cup_and_Handle'
+    ]
     
-    df['future_high_5'] = df['high'].shift(-5).rolling(window=5, min_periods=1).max()
+    df['future_high_15'] = df['high'].shift(-15).rolling(window=15, min_periods=1).max()
     
-    df['target'] = (df['future_high_5'] >= (df['close'] * 1.003)).astype(int)
+    df['target'] = (df['future_high_15'] >= (df['close'] * 1.006)).astype(int)
     
     cols_to_keep = features + ['target']
     df_clean = df.loc[:, cols_to_keep].dropna()
@@ -74,7 +122,12 @@ def train():
 
     print(f"Distribuição do Target:\n{df_model['target'].value_counts(normalize=True)*100}")
 
-    features = ['RSI', 'MACDh', 'ATR', 'Dist_BBU', 'Dist_BBL', 'ret_1', 'ret_2', 'ret_3']
+    features = [
+        'RSI', 'MACDh', 'ATR', 'Dist_BBU', 'Dist_BBL', 'ret_1', 'ret_2', 'ret_3', 
+        'OBV', 'VWAP', 'ATR_pct', 'ROC_5', 'ROC_15', 'Body_Size', 'Upper_Wick', 
+        'Lower_Wick', 'Wick_Ratio', 'CDL_ENGULFING', 'CDL_HAMMER', 
+        'CDL_MORNINGSTAR', 'Cup_and_Handle'
+    ]
     X = df_model[features]
     y = df_model['target']
 

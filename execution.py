@@ -55,9 +55,9 @@ def sync_position_state():
                         last_buy_price = float(buyer_trades[-1]['price'])
                         pos_db["avg_price"] = last_buy_price
                         pos_db["highest_price"] = last_buy_price
-                        pos_db["atr_distance"] = last_buy_price * 0.015
-                        pos_db["sl_price"] = last_buy_price - pos_db["atr_distance"]
-                        pos_db["tp_price"] = last_buy_price + (last_buy_price * 0.008) # 0.8% scalping TP
+                        pos_db["atr_value"] = last_buy_price * 0.002
+                        pos_db["sl_price"] = last_buy_price - (0.5 * pos_db["atr_value"])
+                        pos_db["tp_price"] = last_buy_price + (3.0 * pos_db["atr_value"])
                         pos_db["partial_tp_hit"] = 0
                         pos_db["last_buy_time"] = str(pd.to_datetime(buyer_trades[-1]['time'], unit='ms'))
                         logger.info(f"[SYNC] Posição aberta {symbol}. Saldo: {balance} | Preço: ${last_buy_price:.2f}")
@@ -65,9 +65,9 @@ def sync_position_state():
                         current_price = float(client.get_ticker(symbol=symbol)['lastPrice'])
                         pos_db["avg_price"] = current_price
                         pos_db["highest_price"] = current_price
-                        pos_db["atr_distance"] = current_price * 0.015
-                        pos_db["sl_price"] = current_price - pos_db["atr_distance"]
-                        pos_db["tp_price"] = current_price + (current_price * 0.008)
+                        pos_db["atr_value"] = current_price * 0.002
+                        pos_db["sl_price"] = current_price - (0.5 * pos_db["atr_value"])
+                        pos_db["tp_price"] = current_price + (3.0 * pos_db["atr_value"])
                         pos_db["partial_tp_hit"] = 0
                         pos_db["last_buy_time"] = str(datetime.now())
                         logger.warning(f"[SYNC] {symbol} posição sem histórico. Preço ajustado: ${current_price:.2f}")
@@ -129,21 +129,21 @@ async def execute_trade(symbol: str, decision: str, current_price: float, peso: 
             
             usdt_free, total_equity, exposure_ratio = calculate_account_exposure()
             
-            if exposure_ratio >= 0.80:
-                logger.warning(f"[EXECUTION] Compra {symbol} bloqueada: Exposição da conta está em {exposure_ratio*100:.1f}%. Máximo permitido é 80%.")
+            if exposure_ratio >= 0.95:
+                logger.warning(f"[EXECUTION] Compra {symbol} bloqueada: Exposição da conta está em {exposure_ratio*100:.1f}%. Máximo permitido é 95%.")
                 return
 
-            # Max 30% do equity total per trade
-            max_usdt_per_trade = total_equity * 0.30
+            # Max 90% do equity total per trade
+            max_usdt_per_trade = total_equity * 0.90
             usdt_utilizado = min(usdt_free, max_usdt_per_trade) * peso
             
-            # Garantir que sobra pelo menos 20% do equity em USDT
+            # Garantir que sobra pelo menos 5% do equity em USDT
             usdt_after = usdt_free - usdt_utilizado
-            if usdt_after < total_equity * 0.20:
-                usdt_utilizado = usdt_free - (total_equity * 0.20)
+            if usdt_after < total_equity * 0.05:
+                usdt_utilizado = usdt_free - (total_equity * 0.05)
                 
             if usdt_utilizado <= 0:
-                logger.warning(f"[EXECUTION] Compra {symbol} bloqueada: Sem margem USDT para manter os 20% livres.")
+                logger.warning(f"[EXECUTION] Compra {symbol} bloqueada: Sem margem USDT para manter os 5% livres.")
                 return
 
             qty_coin = usdt_utilizado / current_price
@@ -170,13 +170,11 @@ async def execute_trade(symbol: str, decision: str, current_price: float, peso: 
             pos_db["qty"] += qty_coin
             pos_db["highest_price"] = current_price
             
-            # Stop Loss via ATR (mantido dinâmico para evitar violinadas)
-            distancia_atr = 2 * atr if atr > 0 else (current_price * 0.015)
-            pos_db["atr_distance"] = distancia_atr
-            pos_db["sl_price"] = current_price - distancia_atr
-            
-            # Take Profit curto agressivo (0.8%) para Scalping, já superando as taxas de 0.2% totais
-            pos_db["tp_price"] = current_price + (current_price * 0.008)
+            # Stop Loss e Take Profit baseados em ATR (Risk/Reward 1:2)
+            atr_val = atr if atr > 0 else (current_price * 0.002)
+            pos_db["atr_value"] = atr_val
+            pos_db["sl_price"] = current_price - (0.5 * atr_val)
+            pos_db["tp_price"] = current_price + (3.0 * atr_val)
             pos_db["partial_tp_hit"] = 0
             
             pos_db["last_buy_time"] = str(datetime.now())
@@ -186,24 +184,20 @@ async def execute_trade(symbol: str, decision: str, current_price: float, peso: 
             print(f"[EXECUTION] 🟢 COMPRA EXECUTADA {symbol} | Qtd: {qty_coin} | Preço Médio: ${pos_db['avg_price']:.2f}")
             logger.info(f"Sucesso! Order ID: {order.get('orderId')} | Status: {order.get('status')}")
 
-        elif decision in ["VENDA_FORTE", "VENDA_STOP", "VENDA_TIME_STOP", "VENDA_PARCIAL"]:
+        elif decision in ["VENDA_FORTE", "VENDA_STOP", "VENDA_TIME_STOP", "VENDA_PARCIAL", "VENDA_MODERADA", "VENDA_LEVE"]:
             if pos_db["qty"] <= 0:
                 return
                 
             logger.info(f"[EXECUTION] {symbol} - Iniciando {decision}...")
             
-            if decision == "VENDA_FORTE":
-                preco_minimo_venda = pos_db["avg_price"] * 1.0025
-                if current_price < preco_minimo_venda:
-                    logger.warning(f"[EXECUTION] {symbol} Venda Bloqueada: Preço (${current_price:.2f}) não cobre PM (${pos_db['avg_price']:.2f}) + Taxas.")
-                    return
-            
             base_asset = get_base_asset(symbol)
             balance_info = client.get_asset_balance(asset=base_asset)
             balance = float(balance_info['free']) if balance_info else 0.0
             
-            if decision == "VENDA_PARCIAL":
-                coin_qty = pos_db["qty"] / 2
+            if decision == "VENDA_LEVE":
+                coin_qty = balance * 0.25
+            elif decision in ["VENDA_MODERADA", "VENDA_PARCIAL"]:
+                coin_qty = balance * 0.50
             else:
                 coin_qty = balance
                 
@@ -211,7 +205,8 @@ async def execute_trade(symbol: str, decision: str, current_price: float, peso: 
             
             if coin_qty <= 0:
                  logger.warning(f"[EXECUTION] {symbol} Saldo muito baixo para venda.")
-                 database.clear_position(symbol)
+                 if decision in ["VENDA_FORTE", "VENDA_STOP", "VENDA_TIME_STOP"]:
+                     database.clear_position(symbol)
                  return
             
             order = client.order_market_sell(
@@ -219,12 +214,13 @@ async def execute_trade(symbol: str, decision: str, current_price: float, peso: 
                 quantity=coin_qty
             )
             
-            if decision == "VENDA_PARCIAL":
+            if decision in ["VENDA_PARCIAL", "VENDA_MODERADA", "VENDA_LEVE"]:
                 pos_db["qty"] -= coin_qty
-                pos_db["partial_tp_hit"] = 1
-                # Break-even com margem de segurança de 0.25% para cobrir taxas (0.1% maker/taker + slippage)
-                break_even_price = pos_db["avg_price"] * 1.0025
-                pos_db["sl_price"] = max(pos_db["sl_price"], break_even_price)
+                if decision == "VENDA_PARCIAL":
+                    pos_db["partial_tp_hit"] = 1
+                    # Break-even com margem de segurança
+                    break_even_price = pos_db["avg_price"] * 1.0025
+                    pos_db["sl_price"] = max(pos_db["sl_price"], break_even_price)
                 database.update_position(pos_db)
             else:
                 database.clear_position(symbol)
@@ -252,11 +248,14 @@ async def check_risk_management(symbol: str, current_price: float, current_time)
         pos_db["highest_price"] = current_price
         updated = True
         
-    novo_sl = pos_db["highest_price"] - pos_db["atr_distance"]
-    if novo_sl > pos_db["sl_price"]:
-        pos_db["sl_price"] = novo_sl
-        updated = True
-        
+    # Trailing Stop: Break-even após lucro de 2.0 * ATR
+    atr_val = pos_db.get("atr_value", current_price * 0.002)
+    if pos_db["highest_price"] >= pos_db["avg_price"] + (2.0 * atr_val):
+        break_even_lock = pos_db["avg_price"] * 1.002 # Cobre as taxas
+        if break_even_lock > pos_db["sl_price"]:
+            pos_db["sl_price"] = break_even_lock
+            updated = True
+            
     if updated:
         database.update_position(pos_db)
         
@@ -265,9 +264,9 @@ async def check_risk_management(symbol: str, current_price: float, current_time)
         await execute_trade(symbol, "VENDA_STOP", current_price, 1.0)
         return
         
-    if current_price >= pos_db["tp_price"] and pos_db["partial_tp_hit"] == 0:
-        logger.info(f"[RISK] 💰 {symbol} Scale-out ativado! Alvo curto atingido (${pos_db['tp_price']:.2f}). Realizando parcial.")
-        await execute_trade(symbol, "VENDA_PARCIAL", current_price, 1.0)
+    if current_price >= pos_db["tp_price"]:
+        logger.info(f"[RISK] 💰 {symbol} Take Profit Principal atingido (${pos_db['tp_price']:.2f}). Fechando posição completa.")
+        await execute_trade(symbol, "VENDA_FORTE", current_price, 1.0)
         return
         
     if pos_db["last_buy_time"] is not None:
