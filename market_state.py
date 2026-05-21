@@ -93,6 +93,7 @@ def append_new_candle(symbol: str, candle: dict) -> dict:
     new_df.set_index('date', inplace=True)
     
     history_data[symbol] = pd.concat([history_data[symbol], new_df])
+    history_data[symbol] = history_data[symbol][~history_data[symbol].index.duplicated(keep='last')]
     
     if len(history_data[symbol]) > 10005:
         history_data[symbol] = history_data[symbol].tail(10000)
