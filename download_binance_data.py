@@ -69,8 +69,12 @@ def get_latest_downloaded_month(folder: str, symbol: str, interval: str) -> tupl
                 latest_year, latest_month = y, mo
 
     if not has_files:
-        start = PAIR_START.get(symbol, (2021, 12))
-        return start[0], start[1] - 1 if start[1] > 1 else (start[0] - 1, 12)
+        start_y, start_m = PAIR_START.get(symbol, (2021, 12))
+        # Recua um mês para que download_pair inicie exatamente no mês de início
+        if start_m > 1:
+            return start_y, start_m - 1
+        else:
+            return start_y - 1, 12
 
     return latest_year, latest_month
 
