@@ -24,8 +24,36 @@ except Exception as e:
     logger.error(f"Erro ao conectar na Binance Testnet: {e}")
     client = None
 
+from binance_stream import ATIVOS  # fonte única da lista de ativos
+
+# Precisão de quantidade por ativo (casas decimais para floor)
+# Baseado nos filtros LOT_SIZE da Binance
+_QTY_DECIMALS: dict[str, int] = {
+    "BTCUSDT":  5,
+    "ETHUSDT":  4,
+    "XRPUSDT":  1,
+    "SOLUSDT":  2,
+    "BNBUSDT":  3,
+    "AVAXUSDT": 2,
+}
+
+# Saldo mínimo relevante por ativo base
+_MIN_BALANCES: dict[str, float] = {
+    "BTC":  0.0001,
+    "ETH":  0.001,
+    "XRP":  1.0,
+    "SOL":  0.01,
+    "BNB":  0.001,
+    "AVAX": 0.01,
+}
+
+
 def get_base_asset(symbol: str) -> str:
     return symbol.replace("USDT", "")
+
+
+def _decimais_para(symbol: str) -> int:
+    return _QTY_DECIMALS.get(symbol, 5)
 
 def sync_position_state():
     """
@@ -34,15 +62,13 @@ def sync_position_state():
     if not client:
         return
 
-    ativos = ["BTCUSDT", "ETHUSDT", "XRPUSDT"]
     try:
-        for symbol in ativos:
+        for symbol in ATIVOS:
             base_asset = get_base_asset(symbol)
             balance_info = client.get_asset_balance(asset=base_asset)
             balance = float(balance_info['free']) if balance_info else 0.0
-            
-            min_balances = {"BTC": 0.001, "ETH": 0.01, "XRP": 10.0}
-            min_bal = min_balances.get(base_asset, 0.001)
+
+            min_bal = _MIN_BALANCES.get(base_asset, 0.001)
 
             pos_db = database.get_position(symbol)
 
@@ -147,7 +173,7 @@ async def execute_trade(symbol: str, decision: str, current_price: float, peso: 
                 return
 
             qty_coin = usdt_utilizado / current_price
-            qty_coin = _arredondar_fracao(qty_coin, 5) if symbol != "XRPUSDT" else _arredondar_fracao(qty_coin, 1)
+            qty_coin = _arredondar_fracao(qty_coin, _decimais_para(symbol))
             
             if usdt_utilizado < 11.0 or qty_coin <= 0:
                 logger.warning(f"[EXECUTION] {symbol} Compra ignorada: Lote muito pequeno ({usdt_utilizado:.2f} USDT).")
@@ -210,7 +236,7 @@ async def execute_trade(symbol: str, decision: str, current_price: float, peso: 
             else:
                 coin_qty = balance
                 
-            coin_qty = _arredondar_fracao(coin_qty, 5) if symbol != "XRPUSDT" else _arredondar_fracao(coin_qty, 1)
+            coin_qty = _arredondar_fracao(coin_qty, _decimais_para(symbol))
             
             if coin_qty <= 0:
                  logger.warning(f"[EXECUTION] {symbol} Saldo muito baixo para venda.")

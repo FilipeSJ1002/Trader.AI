@@ -1,122 +1,172 @@
+"""
+download_binance_data.py — V4
+ETL automatizado de dados históricos do Binance Vision.
+
+Pares suportados: BTC, ETH, XRP, SOL, BNB, AVAX
+Intervalos:       1m (padrão), 5m, 15m (para backtesting MTF)
+
+Como usar:
+  python download_binance_data.py              # baixa 1m de todos os pares
+  python download_binance_data.py --interval 5m
+  python download_binance_data.py --pair SOLUSDT --interval 1m
+"""
 import os
 import re
 import io
 import zipfile
+import argparse
 import requests
 from datetime import datetime
 
-def get_latest_downloaded_month(folder_path: str, symbol: str) -> tuple[int, int]:
-    """
-    Verifica a pasta do par e retorna o ano e mês do arquivo mais recente baixado.
-    Se a pasta estiver vazia ou não existir, retorna (2021, 12) para que
-    o próximo download inicie em (2022, 1).
-    """
-    if not os.path.exists(folder_path):
-        try:
-            os.makedirs(folder_path, exist_ok=True)
-            print(f"Diretório criado: {folder_path}")
-        except Exception as e:
-            print(f"Erro ao criar o diretório {folder_path}: {e}")
-            return 2021, 12
+# ─────────────────────────────────────────────────────────────────────────────
+# Configuração dos pares e pastas de destino
+# ─────────────────────────────────────────────────────────────────────────────
+DATASETS_ROOT = r"C:\Users\filip\Downloads\datasets_brutos"
 
-    latest_year = 2021
-    latest_month = 12
+PAIRS_CONFIG = {
+    "BTCUSDT":  os.path.join(DATASETS_ROOT, "BTC-USDT_datasets_brutos"),
+    "ETHUSDT":  os.path.join(DATASETS_ROOT, "ETH-USDT_datasets_brutos"),
+    "XRPUSDT":  os.path.join(DATASETS_ROOT, "XRP-USDT_datasets_brutos"),
+    "SOLUSDT":  os.path.join(DATASETS_ROOT, "SOL-USDT_datasets_brutos"),
+    "BNBUSDT":  os.path.join(DATASETS_ROOT, "BNB-USDT_datasets_brutos"),
+    "AVAXUSDT": os.path.join(DATASETS_ROOT, "AVAX-USDT_datasets_brutos"),
+}
 
-    pattern = re.compile(rf"^{symbol}-1m-(?P<year>\d{{4}})-(?P<month>\d{{2}})\.csv$")
+# Data de início disponível no Binance Vision por par
+PAIR_START = {
+    "BTCUSDT":  (2022, 1),
+    "ETHUSDT":  (2022, 1),
+    "XRPUSDT":  (2022, 1),
+    "SOLUSDT":  (2021, 1),   # SOL listado em Set/2020
+    "BNBUSDT":  (2021, 1),
+    "AVAXUSDT": (2021, 1),   # AVAX listado em Set/2020
+}
+
+
+def get_latest_downloaded_month(folder: str, symbol: str, interval: str) -> tuple[int, int]:
+    """Detecta o mês mais recente já baixado para evitar redownload."""
+    os.makedirs(folder, exist_ok=True)
+
+    pattern = re.compile(
+        rf"^{symbol}-{interval}-(?P<year>\d{{4}})-(?P<month>\d{{2}})\.csv$"
+    )
+
+    latest_year, latest_month = PAIR_START.get(symbol, (2021, 12))
+    # recua um mês para forçar o próximo download começar deste
+    if latest_month == 1:
+        latest_year -= 1
+        latest_month = 12
+    else:
+        latest_month -= 1
 
     has_files = False
-    try:
-        for file in os.listdir(folder_path):
-            match = pattern.match(file)
-            if match:
-                has_files = True
-                y = int(match.group("year"))
-                m = int(match.group("month"))
-                if y > latest_year or (y == latest_year and m > latest_month):
-                    latest_year = y
-                    latest_month = m
-    except Exception as e:
-        print(f"Erro ao ler o diretório {folder_path}: {e}")
+    for f in os.listdir(folder):
+        m = pattern.match(f)
+        if m:
+            has_files = True
+            y, mo = int(m.group("year")), int(m.group("month"))
+            if y > latest_year or (y == latest_year and mo > latest_month):
+                latest_year, latest_month = y, mo
 
     if not has_files:
-        return 2021, 12
+        start = PAIR_START.get(symbol, (2021, 12))
+        return start[0], start[1] - 1 if start[1] > 1 else (start[0] - 1, 12)
 
     return latest_year, latest_month
 
-def run_etl():
-    """
-    Função principal que itera sobre os pares, verifica o último mês baixado,
-    e faz o download/extração dos próximos meses até o mês passado.
-    """
-    base_folders = {
-        "BTCUSDT": r"C:\Users\filip\Downloads\datasets_brutos\BTC-USDT_datasets_brutos",
-        "ETHUSDT": r"C:\Users\filip\Downloads\datasets_brutos\ETH-USDT_datasets_brutos",
-        "XRPUSDT": r"C:\Users\filip\Downloads\datasets_brutos\XRP-USDT_datasets_brutos"
-    }
 
-    current_date = datetime.now()
-    if current_date.month == 1:
-        target_year = current_date.year - 1
-        target_month = 12
+def download_pair(symbol: str, interval: str = "1m"):
+    """Baixa todos os meses faltantes para um par/intervalo."""
+    folder = PAIRS_CONFIG[symbol]
+    os.makedirs(folder, exist_ok=True)
+
+    now = datetime.now()
+    # Limite: mês anterior (dados do mês atual não estão completos)
+    if now.month == 1:
+        target_year, target_month = now.year - 1, 12
     else:
-        target_year = current_date.year
-        target_month = current_date.month - 1
+        target_year, target_month = now.year, now.month - 1
 
-    print("=== ETL de Dados Históricos Binance Vision ===")
-    print(f"Data limite para download: {target_year}-{target_month:02d}")
+    last_y, last_m = get_latest_downloaded_month(folder, symbol, interval)
 
-    for symbol, folder in base_folders.items():
-        print(f"\n--- Processando Par: {symbol} ---")
-        
-        last_y, last_m = get_latest_downloaded_month(folder, symbol)
-        
-        if last_m == 12:
-            curr_y = last_y + 1
+    # Próximo mês a baixar
+    if last_m == 12:
+        curr_y, curr_m = last_y + 1, 1
+    else:
+        curr_y, curr_m = last_y, last_m + 1
+
+    print(f"\n[{symbol}/{interval}] Ultimo arquivo: {last_y}-{last_m:02d} | Baixando a partir de {curr_y}-{curr_m:02d}...")
+
+    baixados = 0
+    while (curr_y < target_year) or (curr_y == target_year and curr_m <= target_month):
+        url = (
+            f"https://data.binance.vision/data/spot/monthly/klines/"
+            f"{symbol}/{interval}/{symbol}-{interval}-{curr_y}-{curr_m:02d}.zip"
+        )
+
+        try:
+            r = requests.get(url, timeout=60)
+            if r.status_code == 200:
+                with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+                    csvs = [f for f in z.namelist() if f.endswith('.csv')]
+                    if csvs:
+                        for csv_file in csvs:
+                            z.extract(csv_file, path=folder)
+                        print(f"  [OK] {symbol}-{interval}-{curr_y}-{curr_m:02d}.csv extraido")
+                        baixados += 1
+                    else:
+                        print(f"  [WARN] ZIP sem .csv: {url}")
+            elif r.status_code == 404:
+                print(f"  [404] {curr_y}-{curr_m:02d} ainda nao disponivel na Binance Vision.")
+            else:
+                print(f"  [HTTP {r.status_code}] {url}")
+        except Exception as e:
+            print(f"  [ERRO] {e}")
+
+        if curr_m == 12:
+            curr_y += 1
             curr_m = 1
         else:
-            curr_y = last_y
-            curr_m = last_m + 1
-            
-        if last_y == 2021 and last_m == 12:
-            print(f"Nenhum arquivo encontrado em {folder}. Iniciando download em 2022-01.")
-        else:
-            print(f"Último arquivo encontrado: {last_y}-{last_m:02d}. Iniciando download em {curr_y}-{curr_m:02d}.")
+            curr_m += 1
 
-        while (curr_y < target_year) or (curr_y == target_year and curr_m <= target_month):
-            year_str = str(curr_y)
-            month_str = f"{curr_m:02d}"
-            
-            url = f"https://data.binance.vision/data/spot/monthly/klines/{symbol}/1m/{symbol}-1m-{year_str}-{month_str}.zip"
-            print(f"[*] Baixando: {symbol} de {year_str}-{month_str}...")
-            
-            try:
-                response = requests.get(url, timeout=30)
-                
-                if response.status_code == 200:
-                    try:
-                        with zipfile.ZipFile(io.BytesIO(response.content)) as z:
-                            csv_files = [f for f in z.namelist() if f.endswith('.csv')]
-                            if csv_files:
-                                for csv_file in csv_files:
-                                    z.extract(csv_file, path=folder)
-                                print(f"  [+] Sucesso! Arquivo extraído em: {folder}")
-                            else:
-                                print("  [-] O ZIP foi baixado, mas não continha arquivos .csv.")
-                    except zipfile.BadZipFile:
-                        print("  [!] Erro: O arquivo baixado não é um ZIP válido.")
-                        
-                elif response.status_code == 404:
-                    print("  [-] Erro 404: Arquivo não encontrado. A Binance provavelmente não o disponibilizou ainda.")
-                else:
-                    print(f"  [!] Erro HTTP {response.status_code} ao tentar acessar a URL.")
-            except Exception as e:
-                print(f"  [!] Erro na requisição (timeout/conexão): {e}")
-                
-            if curr_m == 12:
-                curr_y += 1
-                curr_m = 1
-            else:
-                curr_m += 1
+    print(f"[{symbol}/{interval}] Concluido. {baixados} arquivo(s) novos baixados.")
+    return baixados
+
+
+def run_etl(pairs: list[str] = None, interval: str = "1m"):
+    """Executa o ETL para os pares e intervalo especificados."""
+    if pairs is None:
+        pairs = list(PAIRS_CONFIG.keys())
+
+    now = datetime.now()
+    print("=" * 60)
+    print(f"ETL Trader.AI V4 — Binance Vision")
+    print(f"Intervalo: {interval} | Pares: {', '.join(pairs)}")
+    print(f"Data limite: {now.year}-{now.month - 1:02d}")
+    print("=" * 60)
+
+    total = 0
+    for symbol in pairs:
+        if symbol not in PAIRS_CONFIG:
+            print(f"[WARN] Par desconhecido: {symbol}. Ignorando.")
+            continue
+        total += download_pair(symbol, interval)
+
+    print(f"\nETL concluido. Total de arquivos baixados: {total}")
+
 
 if __name__ == "__main__":
-    run_etl()
+    parser = argparse.ArgumentParser(description="Download de dados historicos Binance Vision — V4")
+    parser.add_argument(
+        "--pair", type=str, default=None,
+        help="Par especifico (ex: SOLUSDT). Padrao: todos os pares."
+    )
+    parser.add_argument(
+        "--interval", type=str, default="1m",
+        choices=["1m", "5m", "15m", "1h"],
+        help="Intervalo de tempo. Padrao: 1m"
+    )
+    args = parser.parse_args()
+
+    pairs = [args.pair.upper()] if args.pair else None
+    run_etl(pairs=pairs, interval=args.interval)

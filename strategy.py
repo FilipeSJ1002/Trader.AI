@@ -73,6 +73,12 @@ class TechnicalAnalysis:
         cup_cond = (cup_depth > 0.015) & (cup_edges_match < 0.01) & (handle_drop > 0.002) & (handle_drop < 0.01)
         df['Cup_and_Handle'] = cup_cond.astype(int)
 
+        # ── Filtro de Volume (V4) ─────────────────────────────────────
+        # vol_ratio = volume do candle atual / média dos últimos 20 candles
+        # Indica se há interesse real do mercado na movimentação atual
+        df['vol_sma20'] = df['volume'].rolling(window=20).mean()
+        df['vol_ratio'] = df['volume'] / (df['vol_sma20'] + 1e-9)
+
         return df
 
     def analisar_compra_venda(self, df: pd.DataFrame) -> dict:
@@ -95,21 +101,28 @@ class TechnicalAnalysis:
         except IndexError:
             raise ValueError(f"Indicadores não encontrados. Colunas disponíveis: {cols}")
 
-        rsi           = last_candle[rsi_col]
-        close_price   = last_candle['close']
-        atr_value     = last_candle[atr_col]
-        bb_lower      = last_candle[bb_lower_col]
-        bb_upper      = last_candle[bb_upper_col]
-        macd_hist     = last_candle[macd_hist_col]
+        rsi            = last_candle[rsi_col]
+        close_price    = last_candle['close']
+        atr_value      = last_candle[atr_col]
+        bb_lower       = last_candle[bb_lower_col]
+        bb_upper       = last_candle[bb_upper_col]
+        macd_hist      = last_candle[macd_hist_col]
         prev_macd_hist = prev_candle[macd_hist_col]
-        ema_200       = last_candle[ema_200_col]
-        obv_val       = last_candle[obv_col]
-        prev_obv      = df.iloc[-2][obv_col]
-        vwap_val      = last_candle[vwap_col]
+        ema_200        = last_candle[ema_200_col]
+        obv_val        = last_candle[obv_col]
+        prev_obv       = df.iloc[-2][obv_col]
+        vwap_val       = last_candle[vwap_col]
+        vol_ratio      = last_candle.get('vol_ratio', 1.0)   # V4: volume relativo
 
         decision   = "NEUTRO"
         buy_score  = 0
         sell_score = 0
+
+        # ── Filtro de Volume (V4) ─────────────────────────────────────
+        # Baixo volume = mercado sem interesse = sinal não confiável
+        volume_ok = vol_ratio >= 0.8
+        if not volume_ok:
+            logger.debug(f"Volume baixo (ratio={vol_ratio:.2f}) — entrada bloqueada preventivamente.")
 
         # ── Sinais de compra ──────────────────────────────────────────
         if rsi < 30:   buy_score += 40
@@ -117,6 +130,12 @@ class TechnicalAnalysis:
         if close_price <= bb_lower: buy_score += 35
         if macd_hist > prev_macd_hist: buy_score += 25
         elif macd_hist < prev_macd_hist: sell_score += 25
+
+        # ── Bônus de volume alto (V4) ─────────────────────────────────
+        # Volume acima de 1.5× a média confirma que o movimento tem força
+        if vol_ratio >= 1.5:
+            buy_score  += 15
+            sell_score += 10   # também aumenta confiança em sinais de venda
 
         # ── Sinais de venda ───────────────────────────────────────────
         if rsi > 75:   sell_score += 40
@@ -126,13 +145,13 @@ class TechnicalAnalysis:
         # ── Bônus de padrões ──────────────────────────────────────────
         if last_candle['Cup_and_Handle'] == 1:
             buy_score += 40
-            logger.info("☕ Padrão Xícara e Alça Detectado!")
+            logger.info("Padrao Xicara e Alca Detectado!")
         if (last_candle['CDL_ENGULFING'] == 100 or
                 last_candle['CDL_HAMMER'] == 100 or
                 last_candle['CDL_MORNINGSTAR'] == 100):
             if close_price <= bb_lower * 1.01:
                 buy_score += 30
-                logger.info("🕯️ Padrão Candlestick de Alta em suporte!")
+                logger.info("Padrao Candlestick de Alta em suporte!")
 
         # ── Filtro de tendência (EMA 200) ─────────────────────────────
         tendencia_alta = close_price > ema_200
@@ -143,6 +162,10 @@ class TechnicalAnalysis:
         elif buy_score >= 60:  decision = "COMPRA_MODERADA"
         elif buy_score >= 45:  decision = "COMPRA_LEVE"
         elif sell_score >= 60: decision = "VENDA_FORTE"
+
+        # ── Bloqueia entrada com volume insuficiente ──────────────────
+        if not volume_ok and decision.startswith("COMPRA_"):
+            decision = "BLOQUEADO_VOLUME_BAIXO"
 
         # ── Inferência do modelo de ML V4 ────────────────────────────
         ml_prob_success = 0.0
@@ -220,6 +243,7 @@ class TechnicalAnalysis:
                 "sell_score":       sell_score,
                 "close_price":      close_price,
                 "atr":              round(atr_value, 4),
+                "vol_ratio":        round(float(vol_ratio), 3),
                 "ml_prob_success":  round(ml_prob_success, 4),
                 "ml_prob_fail":     round(ml_prob_fail, 4),
                 "ml_status":        ml_status

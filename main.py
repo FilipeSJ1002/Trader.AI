@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import market_state
 import database
+from binance_stream import ATIVOS  # fonte única da lista de ativos
 
 load_dotenv()
 
@@ -35,9 +36,8 @@ async def startup_event():
             return
 
         client = Client(api_key, secret, testnet=True)
-        ativos = ["BTCUSDT", "ETHUSDT", "XRPUSDT"]
 
-        for symbol in ativos:
+        for symbol in ATIVOS:
             print(f"Carregando histórico 1M para {symbol} da Binance...")
             klines_1m = client.get_historical_klines(symbol, Client.KLINE_INTERVAL_1MINUTE, "7 days ago UTC")
             df_1m = pd.DataFrame(klines_1m, columns=[
@@ -146,10 +146,25 @@ def recent_trades(limit: int = 20):
 @app.get("/positions")
 def positions():
     """Retorna o estado atual de todas as posições abertas."""
-    ativos = ["BTCUSDT", "ETHUSDT", "XRPUSDT"]
     result = {}
-    for symbol in ativos:
+    for symbol in ATIVOS:
         pos = database.get_position(symbol)
         if pos["qty"] > 0:
             result[symbol] = pos
     return {"open_positions": result, "count": len(result)}
+
+
+@app.get("/regime")
+def regime():
+    """Retorna o regime de mercado atual de todos os ativos monitorados."""
+    return {
+        "regimes": {
+            symbol: {
+                "regime":      market_state.market_regime.get(symbol, "UNKNOWN"),
+                "signal_5m":   market_state._get_5m_signal(symbol),
+                "daily_return": round(market_state.daily_returns.get(symbol, 0) * 100, 3)
+            }
+            for symbol in ATIVOS
+            if symbol in market_state.history_data
+        }
+    }
