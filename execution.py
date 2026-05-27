@@ -56,7 +56,7 @@ def sync_position_state():
                         pos_db["avg_price"] = last_buy_price
                         pos_db["highest_price"] = last_buy_price
                         pos_db["atr_value"] = last_buy_price * 0.002
-                        pos_db["sl_price"] = last_buy_price - (0.5 * pos_db["atr_value"])
+                        pos_db["sl_price"] = last_buy_price - (1.2 * pos_db["atr_value"])
                         pos_db["tp_price"] = last_buy_price + (3.0 * pos_db["atr_value"])
                         pos_db["partial_tp_hit"] = 0
                         pos_db["last_buy_time"] = str(pd.to_datetime(buyer_trades[-1]['time'], unit='ms'))
@@ -66,7 +66,7 @@ def sync_position_state():
                         pos_db["avg_price"] = current_price
                         pos_db["highest_price"] = current_price
                         pos_db["atr_value"] = current_price * 0.002
-                        pos_db["sl_price"] = current_price - (0.5 * pos_db["atr_value"])
+                        pos_db["sl_price"] = current_price - (1.2 * pos_db["atr_value"])
                         pos_db["tp_price"] = current_price + (3.0 * pos_db["atr_value"])
                         pos_db["partial_tp_hit"] = 0
                         pos_db["last_buy_time"] = str(datetime.now())
@@ -170,17 +170,26 @@ async def execute_trade(symbol: str, decision: str, current_price: float, peso: 
             pos_db["qty"] += qty_coin
             pos_db["highest_price"] = current_price
             
-            # Stop Loss e Take Profit baseados em ATR (Risk/Reward 1:2)
+            # Stop Loss e Take Profit baseados em ATR (Risk/Reward 1:2.5)
+            # SL em 1.2×ATR: espaço suficiente para o ruído normal do mercado de 1M
+            # TP em 3.0×ATR: manter R:R favorável de ~2.5:1
             atr_val = atr if atr > 0 else (current_price * 0.002)
             pos_db["atr_value"] = atr_val
-            pos_db["sl_price"] = current_price - (0.5 * atr_val)
+            pos_db["sl_price"] = current_price - (1.2 * atr_val)
             pos_db["tp_price"] = current_price + (3.0 * atr_val)
             pos_db["partial_tp_hit"] = 0
             
             pos_db["last_buy_time"] = str(datetime.now())
             
             database.update_position(pos_db)
-            
+
+            # Registra a compra no log de performance (V4)
+            fee_usdt = usdt_utilizado * 0.001  # 0.1% taker fee
+            database.log_trade(
+                symbol=symbol, side='BUY', reason=decision,
+                price=current_price, qty=qty_coin, fee_usdt=fee_usdt
+            )
+
             print(f"[EXECUTION] 🟢 COMPRA EXECUTADA {symbol} | Qtd: {qty_coin} | Preço Médio: ${pos_db['avg_price']:.2f}")
             logger.info(f"Sucesso! Order ID: {order.get('orderId')} | Status: {order.get('status')}")
 
@@ -214,6 +223,11 @@ async def execute_trade(symbol: str, decision: str, current_price: float, peso: 
                 quantity=coin_qty
             )
             
+            # Calcula P&L antes de limpar a posição
+            avg_price = pos_db.get("avg_price", 0.0)
+            pnl_pct   = ((current_price - avg_price) / avg_price * 100) if avg_price > 0 else 0.0
+            fee_usdt  = coin_qty * current_price * 0.001
+
             if decision in ["VENDA_PARCIAL", "VENDA_MODERADA", "VENDA_LEVE"]:
                 pos_db["qty"] -= coin_qty
                 if decision == "VENDA_PARCIAL":
@@ -224,8 +238,16 @@ async def execute_trade(symbol: str, decision: str, current_price: float, peso: 
                 database.update_position(pos_db)
             else:
                 database.clear_position(symbol)
-            
-            print(f"[EXECUTION] 🔴 VENDA EXECUTADA {symbol} ({decision}) | Qtd: {coin_qty} | Preço: ${current_price:.2f}")
+
+            # Registra a venda no log de performance (V4)
+            database.log_trade(
+                symbol=symbol, side='SELL', reason=decision,
+                price=current_price, qty=coin_qty,
+                fee_usdt=fee_usdt, pnl_pct=pnl_pct
+            )
+
+            emoji = "🟢" if pnl_pct > 0 else "🔴"
+            print(f"[EXECUTION] {emoji} VENDA EXECUTADA {symbol} ({decision}) | Qtd: {coin_qty} | Preço: ${current_price:.2f} | P&L: {pnl_pct:+.2f}%")
             logger.info(f"Sucesso! Order ID: {order.get('orderId')} | Status: {order.get('status')}")
 
     except BinanceAPIException as e:
@@ -248,13 +270,15 @@ async def check_risk_management(symbol: str, current_price: float, current_time)
         pos_db["highest_price"] = current_price
         updated = True
         
-    # Trailing Stop: Break-even após lucro de 2.0 * ATR
+    # Trailing Stop: Break-even após lucro de 1.5 * ATR
+    # Ativa mais cedo que antes (era 2.0×ATR) para proteger ganhos mais rapidamente
     atr_val = pos_db.get("atr_value", current_price * 0.002)
-    if pos_db["highest_price"] >= pos_db["avg_price"] + (2.0 * atr_val):
-        break_even_lock = pos_db["avg_price"] * 1.002 # Cobre as taxas
+    if pos_db["highest_price"] >= pos_db["avg_price"] + (1.5 * atr_val):
+        break_even_lock = pos_db["avg_price"] * 1.002 # Cobre as taxas de compra + venda (0.2%)
         if break_even_lock > pos_db["sl_price"]:
             pos_db["sl_price"] = break_even_lock
             updated = True
+            logger.info(f"[RISK] 🔒 {symbol} Trailing Stop → Break-even ativado em ${break_even_lock:.4f}")
             
     if updated:
         database.update_position(pos_db)
@@ -275,7 +299,9 @@ async def check_risk_management(symbol: str, current_price: float, current_time)
             
         last_buy = pd.to_datetime(pos_db["last_buy_time"])
         time_diff = current_time - last_buy
-        if time_diff.days >= 3:
-            logger.warning(f"[RISK] ⏰ {symbol} Time Stop atingido! Posição aberta há {time_diff.days} dias.")
+        minutos_aberto = time_diff.total_seconds() / 60
+        # Time Stop: 4 horas (240 minutos) — compatível com estratégia scalping de 1M
+        if minutos_aberto >= 240:
+            logger.warning(f"[RISK] ⏰ {symbol} Time Stop atingido! Posição aberta há {minutos_aberto:.0f} minutos.")
             await execute_trade(symbol, "VENDA_TIME_STOP", current_price, 1.0)
             return
