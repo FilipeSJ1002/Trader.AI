@@ -5,7 +5,7 @@ from datetime import datetime
 import joblib
 import logging
 import numpy as np
-from train_model import FEATURES  # fonte única da lista de features — V4
+from train_model import FEATURES, add_all_features  # fonte única de features — V5 (MTF)
 
 logger = logging.getLogger(__name__)
 
@@ -106,9 +106,21 @@ class TechnicalAnalysis:
         return df
 
     def analisar_compra_venda(self, df: pd.DataFrame) -> dict:
+        # Copia OHLCV crua para a engenharia de features do ML (paridade com treino)
+        df_raw = df[['open', 'high', 'low', 'close', 'volume']].copy()
         df = self.add_indicators(df)
         last_candle = df.iloc[-1]
         prev_candle = df.iloc[-2]
+
+        # ── Features do ML computadas pela MESMA funcao do treino (MTF) ──────
+        # Garante que entrada e saida usem exatamente as mesmas 27 features.
+        feat_row = None
+        try:
+            feat_df = add_all_features(df_raw)
+            if not feat_df.empty:
+                feat_row = feat_df.iloc[-1]
+        except Exception as e:
+            logger.error(f"[ML] Falha ao computar features MTF: {e}")
 
         cols = df.columns.tolist()
         try:
@@ -197,43 +209,15 @@ class TechnicalAnalysis:
         ml_prob_fail    = 0.0
         ml_status       = "NOT_EVALUATED"
 
-        if self.model is not None:
+        # Features auxiliares ainda usadas pelo exit model / payload
+        obv_pct    = ((obv_val - prev_obv) / abs(prev_obv)) if prev_obv != 0 else 0.0
+        obv_pct    = max(-1.0, min(1.0, obv_pct))
+        vwap_dist  = (close_price - vwap_val) / vwap_val if vwap_val != 0 else 0.0
+
+        if self.model is not None and feat_row is not None:
             try:
-                atr_pct    = atr_value / close_price
-                dist_bbu   = (close_price - bb_upper) / close_price
-                dist_bbl   = (close_price - bb_lower) / close_price
-                # Features normalizadas V4
-                obv_pct    = ((obv_val - prev_obv) / abs(prev_obv)) if prev_obv != 0 else 0.0
-                obv_pct    = max(-1.0, min(1.0, obv_pct))  # clip
-                vwap_dist  = (close_price - vwap_val) / vwap_val if vwap_val != 0 else 0.0
-
-                # Novas features V4 (sem CDL que requer TA-Lib)
-                rsi_slope  = rsi - float(df.iloc[-4][rsi_col]) if len(df) >= 4 else 0.0
-                ema20_val  = float(last_candle[ema_20_col]) if ema_20_col else close_price
-                ema20_dist = (close_price - ema20_val) / (close_price + 1e-9)
-
-                X_last = pd.DataFrame([{
-                    'RSI':          rsi,
-                    'MACDh':        macd_hist,
-                    'ATR_pct':      atr_pct,
-                    'Dist_BBU':     dist_bbu,
-                    'Dist_BBL':     dist_bbl,
-                    'ret_1':        last_candle['ret_1'],
-                    'ret_2':        last_candle['ret_2'],
-                    'ret_3':        last_candle['ret_3'],
-                    'OBV_pct':      obv_pct,
-                    'VWAP_dist':    vwap_dist,
-                    'ROC_5':        last_candle[roc_5_col],
-                    'ROC_15':       last_candle[roc_15_col],
-                    'Body_Size':    last_candle['Body_Size'],
-                    'Upper_Wick':   last_candle['Upper_Wick'],
-                    'Lower_Wick':   last_candle['Lower_Wick'],
-                    'Wick_Ratio':   last_candle['Wick_Ratio'],
-                    'vol_ratio':    float(vol_ratio),
-                    'RSI_slope':    rsi_slope,
-                    'EMA20_dist':   ema20_dist,
-                    'Cup_and_Handle': last_candle['Cup_and_Handle']
-                }])[FEATURES]  # garante a ordem exata das features do treino
+                # Vetor de features identico ao treino (20 de 1M + 7 de MTF)
+                X_last = pd.DataFrame([feat_row[FEATURES].to_dict()])[FEATURES]
 
                 proba          = self.model.predict_proba(X_last)
                 ml_prob_fail    = proba[0][0]
@@ -269,44 +253,21 @@ class TechnicalAnalysis:
         # Prediz a probabilidade de queda significativa nos próximos 15 minutos.
         # Útil para sair de posições lucrativas ANTES de o SL ser atingido.
         exit_prob = 0.0
-        if self.exit_model is not None and EXIT_FEATURES is not None:
+        if self.exit_model is not None and EXIT_FEATURES is not None and feat_row is not None:
             try:
-                # Features adicionais necessárias apenas pelo exit model
+                # Reaproveita as features base do feat_row (paridade com treino)
+                # e adiciona as 3 features exclusivas do exit model.
                 rsi_series   = df[rsi_col]
                 bb_squeeze_v = (float(last_candle[bb_upper_col]) - float(last_candle[bb_lower_col])) / (close_price + 1e-9)
                 rsi_high_v   = float(rsi_series.iloc[-5:].max()) if len(rsi_series) >= 5 else rsi
                 bear_mom_v   = float(macd_hist - df.iloc[-3][macd_hist_col]) if len(df) >= 3 else 0.0
 
-                # Calcula EMA20 dist (pode não ter sido calculado se ema_20_col é None)
-                ema20_val_exit = float(last_candle[ema_20_col]) if ema_20_col else close_price
-                ema20_dist_exit = (close_price - ema20_val_exit) / (close_price + 1e-9)
+                exit_data = {f: feat_row[f] for f in EXIT_FEATURES if f in feat_row.index}
+                exit_data['RSI_high']      = rsi_high_v
+                exit_data['BB_squeeze']    = bb_squeeze_v
+                exit_data['Bear_momentum'] = bear_mom_v
 
-                X_exit = pd.DataFrame([{
-                    'RSI':           rsi,
-                    'MACDh':         macd_hist,
-                    'ATR_pct':       atr_value / close_price,
-                    'Dist_BBU':      (close_price - float(last_candle[bb_upper_col])) / close_price,
-                    'Dist_BBL':      (close_price - float(last_candle[bb_lower_col])) / close_price,
-                    'ret_1':         last_candle['ret_1'],
-                    'ret_2':         last_candle['ret_2'],
-                    'ret_3':         last_candle['ret_3'],
-                    'OBV_pct':       obv_pct,
-                    'VWAP_dist':     vwap_dist,
-                    'ROC_5':         last_candle[roc_5_col],
-                    'ROC_15':        last_candle[roc_15_col],
-                    'Body_Size':     last_candle['Body_Size'],
-                    'Upper_Wick':    last_candle['Upper_Wick'],
-                    'Lower_Wick':    last_candle['Lower_Wick'],
-                    'Wick_Ratio':    last_candle['Wick_Ratio'],
-                    'vol_ratio':     float(vol_ratio),
-                    'RSI_slope':     rsi - float(df.iloc[-4][rsi_col]) if len(df) >= 4 else 0.0,
-                    'EMA20_dist':    ema20_dist_exit,
-                    'Cup_and_Handle': last_candle['Cup_and_Handle'],
-                    'RSI_high':      rsi_high_v,
-                    'BB_squeeze':    bb_squeeze_v,
-                    'Bear_momentum': bear_mom_v,
-                }])[EXIT_FEATURES]
-
+                X_exit = pd.DataFrame([exit_data])[EXIT_FEATURES]
                 exit_prob = float(self.exit_model.predict_proba(X_exit)[0][1])
             except Exception as e:
                 logger.debug(f"[EXIT MODEL] Erro na inferencia: {e}")
@@ -323,7 +284,11 @@ class TechnicalAnalysis:
                 "ml_prob_success":  round(ml_prob_success, 4),
                 "ml_prob_fail":     round(ml_prob_fail, 4),
                 "ml_status":        ml_status,
-                "exit_prob":        round(exit_prob, 4)   # prob de queda — Fase 3.3
+                "exit_prob":        round(exit_prob, 4),  # prob de queda — Fase 3.3
+                # Vetor de features no momento da analise — V5 (loop de aprendizado).
+                # Salvo na entrada para reinjetar a experiencia real no retreino.
+                "features": ({f: float(feat_row[f]) for f in FEATURES}
+                             if feat_row is not None else None),
             },
             "timestamp": str(last_candle.name) if hasattr(last_candle, 'name') else str(datetime.now())
         }

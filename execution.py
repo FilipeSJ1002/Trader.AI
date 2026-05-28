@@ -246,6 +246,7 @@ async def execute_trade(
     ml_prob: float = 0.65,           # Fase 4.1 — confiança do ML
     asset_strength: str = "NEUTRAL", # Fase 4.1 — força relativa
     regime: str = "UNKNOWN",         # Fase 4.1 — regime de mercado
+    features: dict = None,           # Fase 5 — vetor de features p/ loop de aprendizado
 ):
     """
     Motor de execução de ordens a mercado para Multi-Asset.
@@ -332,6 +333,18 @@ async def execute_trade(
                 price=current_price, qty=qty_coin, fee_usdt=fee_usdt
             )
 
+            # Fase 5 — salva features de entrada para o loop de aprendizado
+            if features:
+                try:
+                    database.save_trade_features(
+                        symbol=symbol,
+                        entry_time=pos_db["last_buy_time"],
+                        entry_price=current_price,
+                        features=features,
+                    )
+                except Exception as e:
+                    logger.debug(f"[LEARN] Falha ao salvar features de {symbol}: {e}")
+
             # Atualiza equity diário
             _, eq, _ = calculate_account_exposure()
             database.update_daily_equity(eq)
@@ -398,6 +411,13 @@ async def execute_trade(
                 database.update_position(pos_db)
 
             else:
+                # Fechamento total — Fase 5: rotula o trade para o loop de aprendizado.
+                # "Ganho" se bateu TP1 (lucro travado) OU se o P&L final foi positivo.
+                won = (pos_db.get("tp1_hit", 0) == 1) or (pnl_pct > 0)
+                try:
+                    database.close_trade_features(symbol, pnl_pct, won=won)
+                except Exception as e:
+                    logger.debug(f"[LEARN] Falha ao fechar features de {symbol}: {e}")
                 database.clear_position(symbol)
 
             database.log_trade(
@@ -421,6 +441,112 @@ async def execute_trade(
         logger.error(f"[EXECUTION API ERRO] {symbol} | Codigo: {e.status_code} | Mensagem: {e.message}")
     except Exception as e:
         logger.error(f"[EXECUTION ERRO INESPERADO] {symbol} | {str(e)}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# V6 — Motor de Rebalanceamento Trend-Following
+# ─────────────────────────────────────────────────────────────────────────────
+TREND_INVEST_FRACTION   = 0.98   # usa 98% do equity, 2% de caixa de seguranca
+REBALANCE_MIN_DELTA_PCT = 0.03   # so movimenta se o ajuste for > 3% do equity
+
+
+async def rebalance_portfolio(target_weights: dict, current_prices: dict):
+    """
+    Rebalanceia o portfolio para os pesos-alvo do trend_strategy (V6).
+    Vende o que saiu da tendencia, compra/ajusta o que esta em tendencia.
+
+    target_weights : {symbol: peso 0..1} (soma <= 1)
+    current_prices : {symbol: preco atual de mercado}
+    """
+    if not client:
+        logger.error("[REBAL] Cliente Binance nao inicializado.")
+        return
+
+    usdt_free, total_equity, _ = calculate_account_exposure()
+    if total_equity <= 0:
+        return
+
+    ativos_alvo = {k: round(v, 3) for k, v in target_weights.items() if v > 0}
+    logger.info(f"[REBAL] Equity=${total_equity:.2f} | Alvos={ativos_alvo}")
+
+    thr = max(MIN_USDT_TRADE, total_equity * REBALANCE_MIN_DELTA_PCT)
+
+    # Calcula os deltas (valor a ajustar) por ativo
+    deltas = {}
+    for symbol in ATIVOS:
+        price = current_prices.get(symbol)
+        if not price or price <= 0:
+            continue
+        tw            = target_weights.get(symbol, 0.0)
+        target_value  = total_equity * tw * TREND_INVEST_FRACTION
+        pos           = database.get_position(symbol)
+        current_value = pos["qty"] * price
+        deltas[symbol] = (target_value - current_value, price, pos)
+
+    # 1) VENDAS primeiro (liberam USDT para as compras)
+    for symbol, (dv, price, pos) in deltas.items():
+        if dv >= -thr or pos["qty"] <= 0:
+            continue
+        try:
+            base = get_base_asset(symbol)
+            bal  = float(client.get_asset_balance(asset=base)["free"])
+            full_exit = target_weights.get(symbol, 0.0) <= 0
+            sell_qty  = bal if full_exit else min(bal, abs(dv) / price)
+            sell_qty  = _arredondar_fracao(sell_qty, _decimais_para(symbol))
+            if sell_qty <= 0:
+                continue
+
+            client.order_market_sell(symbol=symbol, quantity=sell_qty)
+            avg = pos.get("avg_price", 0.0) or price
+            pnl = (price - avg) / avg * 100 if avg > 0 else 0.0
+            reason = "TREND_EXIT" if full_exit else "TREND_REBAL"
+            database.log_trade(symbol, "SELL", reason, price, sell_qty,
+                               fee_usdt=sell_qty * price * 0.001, pnl_pct=pnl)
+
+            if full_exit:
+                try:
+                    database.close_trade_features(symbol, pnl, won=(pnl > 0))
+                except Exception:
+                    pass
+                database.clear_position(symbol)
+                print(f"[REBAL] SAIDA {symbol} | {sell_qty} @ ${price:.4f} | P&L {pnl:+.2f}%")
+            else:
+                pos["qty"] -= sell_qty
+                database.update_position(pos)
+                print(f"[REBAL] REDUZ {symbol} | -{sell_qty} @ ${price:.4f}")
+        except BinanceAPIException as e:
+            logger.error(f"[REBAL VENDA] {symbol}: {e.message}")
+
+    # 2) COMPRAS (recalcula USDT livre apos as vendas)
+    usdt_free, total_equity, _ = calculate_account_exposure()
+    for symbol, (dv, price, pos) in deltas.items():
+        if dv <= thr:
+            continue
+        try:
+            invest = min(dv, usdt_free * 0.98)
+            if invest < MIN_USDT_TRADE:
+                continue
+            qty = _arredondar_fracao(invest / price, _decimais_para(symbol))
+            if qty <= 0:
+                continue
+
+            client.order_market_buy(symbol=symbol, quantity=qty)
+            old_qty, old_avg = pos["qty"], pos.get("avg_price", 0.0)
+            new_avg = ((old_avg * old_qty) + (price * qty)) / (old_qty + qty) if (old_qty + qty) > 0 else price
+            pos["qty"]           = old_qty + qty
+            pos["avg_price"]     = new_avg
+            pos["highest_price"] = max(pos.get("highest_price", 0.0), price)
+            pos["last_buy_time"] = str(datetime.now())
+            database.update_position(pos)
+            database.log_trade(symbol, "BUY", "TREND_ENTRY", price, qty, fee_usdt=invest * 0.001)
+            usdt_free -= invest
+            print(f"[REBAL] ENTRA {symbol} | {qty} @ ${price:.4f} | ${invest:.0f} "
+                  f"({target_weights.get(symbol,0)*100:.0f}% alvo)")
+        except BinanceAPIException as e:
+            logger.error(f"[REBAL COMPRA] {symbol}: {e.message}")
+
+    _, eq, _ = calculate_account_exposure()
+    database.update_daily_equity(eq)
 
 
 async def check_risk_management(

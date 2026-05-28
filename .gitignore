@@ -12,3 +12,8 @@ venv/
 *.zip
 data/
 datasets_brutos/
+
+# Estado de runtime e logs (não versionar)
+trading_state.db
+train_v5_log.txt
+*.log

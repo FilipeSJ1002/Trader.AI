@@ -1,21 +1,65 @@
 """
-binance_stream.py — V4
+binance_stream.py — V6 (Trend-Following)
 WebSocket multiplex para todos os ativos monitorados.
 
 Ativos: BTC, ETH, XRP, SOL, BNB, AVAX
 Streams: kline_1m + kline_1h por ativo
+
+V6: a decisao deixou de ser scalping de 1M e passou a ser trend-following
+diario (SMA200 + risk-on). A cada candle 1M atualizamos o preco/close diario
+e rebalanceamos o portfolio quando o dia vira ou os sinais mudam.
 """
 import asyncio
 import pandas as pd
 import logging
 from binance import AsyncClient, BinanceSocketManager
 import market_state
-from execution import execute_trade, check_risk_management
+from execution import rebalance_portfolio
+from trend_strategy import compute_target_weights
 
 logger = logging.getLogger(__name__)
 
 # Lista canônica de ativos — sincronizada com main.py e execution.py
 ATIVOS = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT", "BNBUSDT", "AVAXUSDT"]
+
+# Estado do rebalanceamento (evita rebalancear toda hora)
+_last_rebalance_day = None
+_last_eligible      = {}
+
+
+async def _maybe_rebalance(candle_time):
+    """
+    Recalcula os pesos-alvo do trend-following e rebalanceia quando:
+      • muda o dia (a SMA200 diaria so muda 1x/dia), OU
+      • muda o conjunto de ativos elegiveis (cruzamento de SMA200 intradia).
+    """
+    global _last_rebalance_day, _last_eligible
+
+    daily = market_state.get_daily_closes()
+    if len(daily) < 2:
+        return
+
+    targets  = compute_target_weights(daily)
+    eligible = {k: (v > 0) for k, v in targets.items()}
+    day      = pd.to_datetime(candle_time).normalize()
+
+    if _last_rebalance_day == day and eligible == _last_eligible:
+        return  # ja rebalanceou hoje e nada mudou
+
+    # Precos atuais de cada ativo
+    prices = {}
+    for s in ATIVOS:
+        df = market_state.history_data.get(s)
+        if df is not None and len(df) > 0:
+            prices[s] = float(df['close'].iloc[-1])
+
+    if prices:
+        try:
+            await rebalance_portfolio(targets, prices)
+            _last_rebalance_day = day
+            _last_eligible      = eligible
+        except Exception as e:
+            logger.error(f"[REBAL] Falha no rebalanceamento: {e}")
 
 
 async def start_stream():
@@ -63,11 +107,10 @@ async def start_stream():
                                 "volume": float(vela['v'])
                             })
 
-                        # ── Candle de 1M fechado → análise principal ──────────
+                        # ── Candle de 1M fechado → atualiza preco + rebalanceia ──
                         elif stream_name.endswith('@kline_1m') and vela['x']:
-                            candle_time    = pd.to_datetime(vela['t'], unit='ms')
+                            candle_time      = pd.to_datetime(vela['t'], unit='ms')
                             preco_fechamento = float(vela['c'])
-                            volume           = float(vela['v'])
 
                             new_candle = {
                                 "date":   candle_time,
@@ -75,56 +118,14 @@ async def start_stream():
                                 "high":   float(vela['h']),
                                 "low":    float(vela['l']),
                                 "close":  preco_fechamento,
-                                "volume": volume
+                                "volume": float(vela['v'])
                             }
 
-                            # Ignora símbolo sem histórico carregado
-                            if symbol not in market_state.history_data:
-                                continue
+                            # Atualiza buffer de preco + close diario (leve, sem scalping)
+                            market_state.update_price_only(symbol, new_candle)
 
-                            analysis = market_state.append_new_candle(symbol, new_candle)
-                            decision = analysis["decision"]
-
-                            analise        = analysis.get("analysis", {})
-                            rsi            = analise.get("rsi", "N/A")
-                            atr            = analise.get("atr", 0.0)
-                            buy_score      = analise.get("buy_score", 0)
-                            regime         = analise.get("market_regime", "UNKNOWN")
-                            sig_5m         = analise.get("signal_5m", "?")
-                            vol_ratio      = analise.get("vol_ratio", 0.0)
-                            ml_ok          = analise.get("ml_status", "?")
-                            ml_prob        = analise.get("ml_prob_success", 0.65)   # Fase 4.1
-                            asset_strength = analise.get("asset_strength", "NEUTRAL")  # Fase 4.1
-                            exit_prob      = analise.get("exit_prob", 0.0)          # Fase 3.3
-
-                            print(
-                                f"[TRADER.AI] {symbol} | ${preco_fechamento:.4f} | "
-                                f"RSI:{rsi} ATR:{atr:.4f} Vol:{vol_ratio:.2f}x | "
-                                f"Score:{buy_score} | Regime:{regime} 5M:{sig_5m} | "
-                                f"ML:{ml_ok}({ml_prob:.2f}) Forca:{asset_strength} ExitP:{exit_prob:.2f} | => {decision}"
-                            )
-
-                            # ── Gestão de risco sempre ────────────────────────
-                            await check_risk_management(symbol, preco_fechamento, candle_time, exit_prob)
-
-                            # ── Execução de ordens ────────────────────────────
-                            if decision.startswith("COMPRA_"):
-                                pesos = {
-                                    "COMPRA_LEVE":     0.25,
-                                    "COMPRA_MODERADA": 0.50,
-                                    "COMPRA_FORTE":    1.0
-                                }
-                                peso = pesos.get(decision, 1.0)
-                                await execute_trade(
-                                    symbol, decision, preco_fechamento,
-                                    peso=peso, atr=atr,
-                                    ml_prob=ml_prob,           # Fase 4.1
-                                    asset_strength=asset_strength,
-                                    regime=regime,
-                                )
-
-                            elif decision in ["VENDA_FORTE", "VENDA_MODERADA", "VENDA_LEVE"]:
-                                await execute_trade(symbol, decision, preco_fechamento, 1.0, atr)
+                            # Trend-following: rebalanceia quando o dia vira ou os sinais mudam
+                            await _maybe_rebalance(candle_time)
 
                     except Exception as loop_e:
                         logger.error(f"[STREAM] Erro ao processar candle: {loop_e}")

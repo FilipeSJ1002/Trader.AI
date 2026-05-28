@@ -22,6 +22,7 @@ history_data:   dict[str, pd.DataFrame] = {}   # candles 1M
 history_1h:     dict[str, pd.DataFrame] = {}   # candles 1H (do WebSocket)
 history_5m:     dict[str, pd.DataFrame] = {}   # candles 5M (resampled do 1M)
 history_15m:    dict[str, pd.DataFrame] = {}   # candles 15M (resampled do 1M)
+history_daily:  dict[str, pd.Series]    = {}   # closes diarios (V6 — trend-following SMA200)
 
 htf_weakness:   dict[str, bool]  = {}          # fraqueza no HTF (1H)
 market_regime:  dict[str, str]   = {}          # BULL_TREND | SIDEWAYS | BEAR_TREND
@@ -58,6 +59,55 @@ def set_historical_1h_data(symbol: str, df: pd.DataFrame):
     """Inicializa o histórico 1H na memória."""
     global history_1h
     history_1h[symbol] = df
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dados diários — V6 (Trend-Following SMA200)
+# ─────────────────────────────────────────────────────────────────────────────
+def set_historical_daily(symbol: str, close_series: pd.Series):
+    """Inicializa a série de closes diários (para a SMA200 do trend-following)."""
+    global history_daily
+    history_daily[symbol] = close_series.dropna()
+
+
+def update_daily_close(symbol: str, candle_date, close: float):
+    """
+    Atualiza/insere o close do dia atual na série diária.
+    Chamado a cada candle 1M fechado — sobrescreve o close do dia corrente.
+    """
+    global history_daily
+    if symbol not in history_daily:
+        history_daily[symbol] = pd.Series(dtype=float)
+    day = pd.to_datetime(candle_date).normalize()
+    history_daily[symbol].loc[day] = float(close)
+    # mantém histórico suficiente para SMA200 com folga
+    if len(history_daily[symbol]) > 400:
+        history_daily[symbol] = history_daily[symbol].tail(400)
+
+
+def get_daily_closes() -> dict:
+    """Retorna {symbol: Series de closes diários} para o trend_strategy."""
+    return {s: c for s, c in history_daily.items() if c is not None and len(c) > 0}
+
+
+def update_price_only(symbol: str, candle: dict) -> float:
+    """
+    Atualização leve (V6 trend-following): adiciona o candle 1M ao buffer de preço
+    e atualiza o close diário, SEM rodar a análise de scalping (não é mais usada).
+    Retorna o preço de fechamento.
+    """
+    global history_data
+    if symbol not in history_data:
+        history_data[symbol] = pd.DataFrame(columns=['open', 'high', 'low', 'close', 'volume'])
+
+    new_df = pd.DataFrame([candle]).set_index('date')
+    history_data[symbol] = pd.concat([history_data[symbol], new_df])
+    history_data[symbol] = history_data[symbol][~history_data[symbol].index.duplicated(keep='last')]
+    if len(history_data[symbol]) > 2000:
+        history_data[symbol] = history_data[symbol].tail(2000)
+
+    update_daily_close(symbol, candle['date'], candle['close'])
+    return float(candle['close'])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -255,8 +305,10 @@ def append_new_candle(symbol: str, candle: dict) -> dict:
     history_data[symbol] = pd.concat([history_data[symbol], new_df])
     history_data[symbol] = history_data[symbol][~history_data[symbol].index.duplicated(keep='last')]
 
-    if len(history_data[symbol]) > 10005:
-        history_data[symbol] = history_data[symbol].tail(10000)
+    # Buffer aumentado para 25k candles (~17 dias) — necessario para que a
+    # EMA200 de 1H (≈230h) seja computavel no resample MTF do add_all_features.
+    if len(history_data[symbol]) > 25005:
+        history_data[symbol] = history_data[symbol].tail(25000)
 
     # ── Atualiza 5M / 15M e recalcula regime ─────────────────────────
     _resample_and_store(symbol, history_data[symbol])

@@ -108,16 +108,26 @@ def run_retrain(pairs: list = None, skip_download: bool = False) -> dict:
         result["steps"]["processar_dados"] = f"erro: {msg}"
         # Não fatal — se parquet já existe, usa o existente
 
-    # ── Passo 3: Retreinar modelo de entrada ──────────────────────────────
+    # ── Passo 3: Retreinar modelo de entrada (com loop de aprendizado) ────
     logger.info("[RETRAIN] Passo 3: Retreinando scalper_model (entrada)...")
     try:
         from train_model import train_model
-        entry_meta = train_model(pairs=pairs)
+        # Fase 5.6 — injeta a experiencia real do bot (trades ja fechados)
+        extra = None
+        try:
+            from learn_from_trades import build_learning_dataset, stats
+            extra = build_learning_dataset()
+            result["learning_loop"] = stats()
+        except Exception as le:
+            logger.warning(f"[RETRAIN] Loop de aprendizado indisponivel: {le}")
+
+        entry_meta = train_model(pairs=pairs, extra_samples=extra)
         result["entry_model"] = {
             "status":        "ok",
             "wfv_precision": entry_meta.get("wfv_precision"),
             "wfv_auc":       entry_meta.get("wfv_auc"),
             "pairs":         entry_meta.get("pairs_trained"),
+            "real_trades_injected": (len(extra) if extra is not None else 0),
         }
         result["steps"]["train_entry"] = "ok"
         logger.info(f"[RETRAIN] Modelo de entrada retreinado | WFV AUC={entry_meta.get('wfv_auc')}")

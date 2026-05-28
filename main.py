@@ -12,9 +12,9 @@ from binance_stream import ATIVOS  # fonte única da lista de ativos
 load_dotenv()
 
 app = FastAPI(
-    title="Trader.AI API — V4",
-    description="Motor de scalping multi-asset com ML, MTF e log de performance.",
-    version="4.0.0"
+    title="Trader.AI API — V6",
+    description="Motor de trend-following multi-asset (SMA200 + risk-on) com loop de aprendizado.",
+    version="6.0.0"
 )
 
 
@@ -40,7 +40,8 @@ async def startup_event():
 
         for symbol in ATIVOS:
             print(f"Carregando histórico 1M para {symbol} da Binance...")
-            klines_1m = client.get_historical_klines(symbol, Client.KLINE_INTERVAL_1MINUTE, "7 days ago UTC")
+            # 15 dias para que as features MTF (EMA200 de 1H ≈230h) sejam validas desde o boot
+            klines_1m = client.get_historical_klines(symbol, Client.KLINE_INTERVAL_1MINUTE, "15 days ago UTC")
             df_1m = pd.DataFrame(klines_1m, columns=[
                 't', 'o', 'h', 'l', 'c', 'v',
                 'close_time', 'qav', 'num_trades',
@@ -70,6 +71,20 @@ async def startup_event():
             df_1h.rename(columns={'o': 'open', 'h': 'high', 'l': 'low', 'c': 'close', 'v': 'volume'}, inplace=True)
             market_state.set_historical_1h_data(symbol, df_1h)
             print(f"Histórico 1H carregado para {symbol}: {len(df_1h)} candles.")
+
+            # ── Histórico DIÁRIO (V6 — trend-following SMA200) ────────────────
+            print(f"Carregando histórico diário para {symbol} (250 dias)...")
+            klines_1d = client.get_historical_klines(symbol, Client.KLINE_INTERVAL_1DAY, "250 days ago UTC")
+            df_1d = pd.DataFrame(klines_1d, columns=[
+                't', 'o', 'h', 'l', 'c', 'v',
+                'close_time', 'qav', 'num_trades',
+                'taker_base_vol', 'taker_quote_vol', 'ignore'
+            ])
+            df_1d['date'] = pd.to_datetime(df_1d['t'], unit='ms')
+            df_1d.set_index('date', inplace=True)
+            daily_close = df_1d['c'].astype(float)
+            market_state.set_historical_daily(symbol, daily_close)
+            print(f"Histórico diário carregado para {symbol}: {len(daily_close)} dias.")
 
         import asyncio
         from binance_stream import start_stream
@@ -171,6 +186,27 @@ def regime():
             if symbol in market_state.history_data
         }
     }
+
+
+@app.get("/trend")
+def trend():
+    """
+    Estado atual da estratégia trend-following (V6):
+    quais ativos estão em tendência de alta (acima da SMA200), se está risk-on,
+    e o peso-alvo de cada ativo na carteira.
+    """
+    from trend_strategy import describe_signal
+    daily = market_state.get_daily_closes()
+    if not daily:
+        return {"status": "aguardando dados diarios", "assets": {}}
+    return describe_signal(daily)
+
+
+@app.get("/learning")
+def learning():
+    """Resumo do que o bot já aprendeu com os próprios trades (loop de aprendizado)."""
+    from learn_from_trades import stats
+    return stats()
 
 
 # ── Estado do retreino (evita múltiplos jobs simultâneos) ──────────────────
