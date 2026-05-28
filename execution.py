@@ -281,21 +281,40 @@ async def execute_trade(symbol: str, decision: str, current_price: float, peso: 
     except Exception as e:
         logger.error(f"[EXECUTION ERRO INESPERADO] {symbol} | {str(e)}")
 
-async def check_risk_management(symbol: str, current_price: float, current_time):
+async def check_risk_management(symbol: str, current_price: float, current_time,
+                                exit_prob: float = 0.0):
     """
     Avalia constantemente a posição aberta para gerenciar Stop Loss, Trailing Stop e Scale-out TP.
+    exit_prob: probabilidade de queda calculada pelo exit model (Fase 3.3).
     """
     pos_db = database.get_position(symbol)
-    
+
     if pos_db["qty"] <= 0:
         return
         
     updated = False
-    
+
     if current_price > pos_db["highest_price"]:
         pos_db["highest_price"] = current_price
         updated = True
-        
+
+    # ── Exit Model (Fase 3.3) — Saída Antecipada por ML ──────────────────────
+    # Se o exit model detecta alta probabilidade de queda (> 0.72) E
+    # a posição está no lucro (evita sair no prejuízo desnecessariamente),
+    # fazemos uma saída parcial para proteger os ganhos.
+    if exit_prob >= 0.80 and pos_db["avg_price"] > 0:
+        pnl_pct = (current_price - pos_db["avg_price"]) / pos_db["avg_price"]
+        if pnl_pct > 0.001:  # Só sai se houver pelo menos 0.1% de lucro
+            logger.warning(f"[RISK] {symbol} Exit Model: prob_queda={exit_prob:.2f} | P&L={pnl_pct*100:.2f}% → VENDA_FORTE antecipada")
+            await execute_trade(symbol, "VENDA_FORTE", current_price, 1.0)
+            return
+    elif exit_prob >= 0.72 and pos_db["avg_price"] > 0:
+        pnl_pct = (current_price - pos_db["avg_price"]) / pos_db["avg_price"]
+        if pnl_pct > 0.002:  # 0.2% de lucro mínimo para saída parcial
+            logger.info(f"[RISK] {symbol} Exit Model moderado: prob_queda={exit_prob:.2f} | P&L={pnl_pct*100:.2f}% → VENDA_PARCIAL")
+            await execute_trade(symbol, "VENDA_PARCIAL", current_price, 1.0)
+            return
+
     # Trailing Stop: Break-even após lucro de 1.5 * ATR
     # Ativa mais cedo que antes (era 2.0×ATR) para proteger ganhos mais rapidamente
     atr_val = pos_db.get("atr_value", current_price * 0.002)

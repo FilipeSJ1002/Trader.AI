@@ -93,16 +93,17 @@ async def start_stream():
                             sig_5m    = analise.get("signal_5m", "?")
                             vol_ratio = analise.get("vol_ratio", 0.0)
                             ml_ok     = analise.get("ml_status", "?")
+                            exit_prob = analise.get("exit_prob", 0.0)  # Fase 3.3
 
                             print(
                                 f"[TRADER.AI] {symbol} | ${preco_fechamento:.4f} | "
                                 f"RSI:{rsi} ATR:{atr:.4f} Vol:{vol_ratio:.2f}x | "
                                 f"Score:{buy_score} | Regime:{regime} 5M:{sig_5m} | "
-                                f"ML:{ml_ok} | => {decision}"
+                                f"ML:{ml_ok} ExitP:{exit_prob:.2f} | => {decision}"
                             )
 
                             # ── Gestão de risco sempre ────────────────────────
-                            await check_risk_management(symbol, preco_fechamento, candle_time)
+                            await check_risk_management(symbol, preco_fechamento, candle_time, exit_prob)
 
                             # ── Execução de ordens ────────────────────────────
                             if decision.startswith("COMPRA_"):

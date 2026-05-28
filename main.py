@@ -1,8 +1,9 @@
 import os
+import asyncio
 import pandas as pd
 from datetime import datetime
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 import market_state
 import database
@@ -167,4 +168,51 @@ def regime():
             for symbol in ATIVOS
             if symbol in market_state.history_data
         }
+    }
+
+
+# ── Estado do retreino (evita múltiplos jobs simultâneos) ──────────────────
+_retrain_running = False
+
+
+@app.post("/retrain")
+async def retrain(background_tasks: BackgroundTasks,
+                  pair: str | None = None,
+                  skip_download: bool = False):
+    """
+    Dispara o retreino completo dos modelos em background.
+    Parâmetros (query string):
+      ?pair=BTCUSDT     — retreina só um par (opcional)
+      ?skip_download=true — pula download (usa dados locais)
+    """
+    global _retrain_running
+    if _retrain_running:
+        raise HTTPException(status_code=409, detail="Retreino ja em andamento. Aguarde a conclusao.")
+
+    pairs = [pair.upper()] if pair else None
+
+    def _run():
+        global _retrain_running
+        _retrain_running = True
+        try:
+            from retrain_scheduler import run_retrain
+            run_retrain(pairs=pairs, skip_download=skip_download)
+        finally:
+            _retrain_running = False
+
+    background_tasks.add_task(_run)
+    return {
+        "status":  "started",
+        "message": "Retreino iniciado em background. Consulte /retrain/status para acompanhar.",
+        "pairs":   pairs or "todos",
+    }
+
+
+@app.get("/retrain/status")
+def retrain_status():
+    """Retorna se há retreino em andamento e o histórico dos últimos retreinos."""
+    from retrain_scheduler import get_retrain_log
+    return {
+        "running":       _retrain_running,
+        "recent_runs":   get_retrain_log(limit=5),
     }

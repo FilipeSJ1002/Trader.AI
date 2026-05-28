@@ -9,19 +9,42 @@ from train_model import FEATURES  # fonte única da lista de features — V4
 
 logger = logging.getLogger(__name__)
 
+# EXIT_FEATURES importado do módulo de treino do exit model (se existir)
+try:
+    from train_exit_model import EXIT_FEATURES
+except ImportError:
+    EXIT_FEATURES = None
+
+
+def _load_model_pkl(path: str, label: str):
+    """Carrega um arquivo .pkl — suporta formato legado (modelo direto) e V4 (dict)."""
+    if not os.path.exists(path):
+        logger.warning(f"[ML] {label}: arquivo nao encontrado em {path}")
+        return None, {}
+    try:
+        loaded = joblib.load(path)
+        if isinstance(loaded, dict):
+            model = loaded.get('model')
+            meta  = {k: v for k, v in loaded.items() if k != 'model'}
+            logger.info(f"[ML] {label} carregado | {meta}")
+            return model, meta
+        else:
+            logger.info(f"[ML] {label} legado carregado.")
+            return loaded, {}
+    except Exception as e:
+        logger.error(f"[ML] Erro ao carregar {label}: {e}")
+        return None, {}
+
 
 class TechnicalAnalysis:
     def __init__(self):
-        self.model = None
-        model_path = os.path.join(os.path.dirname(__file__), "scalper_model.pkl")
-        try:
-            if os.path.exists(model_path):
-                self.model = joblib.load(model_path)
-                logger.info("✅ Modelo de ML V4 carregado com sucesso!")
-            else:
-                logger.warning("⚠️ Modelo de ML não encontrado. O filtro preditivo estará inativo.")
-        except Exception as e:
-            logger.error(f"❌ Erro ao carregar o modelo de ML: {e}")
+        base = os.path.dirname(__file__)
+
+        # Modelo de entrada (scalper_model.pkl)
+        self.model, _      = _load_model_pkl(os.path.join(base, "scalper_model.pkl"),  "Modelo de Entrada")
+
+        # Modelo de saida (exit_model.pkl) — Fase 3.3
+        self.exit_model, _ = _load_model_pkl(os.path.join(base, "exit_model.pkl"), "Modelo de Saida")
 
     def add_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         if not isinstance(df.index, pd.DatetimeIndex):
@@ -31,6 +54,7 @@ class TechnicalAnalysis:
         df.ta.rsi(length=14, append=True)
         df.ta.macd(fast=12, slow=26, signal=9, append=True)
         df.ta.bbands(length=20, std=2, append=True)
+        df.ta.ema(length=20, append=True)
         df.ta.ema(length=50, append=True)
         df.ta.ema(length=200, append=True)
         df.ta.atr(length=14, append=True)
@@ -92,6 +116,7 @@ class TechnicalAnalysis:
             bb_upper_col  = [c for c in cols if c.startswith('BBU_20_2')][0]
             macd_hist_col = [c for c in cols if c.startswith('MACDh_12_26_9')][0]
             rsi_col       = [c for c in cols if c.startswith('RSI_14')][0]
+            ema_20_col    = next((c for c in cols if c.startswith('EMA_20')), None)
             ema_200_col   = [c for c in cols if c.startswith('EMA_200')][0]
             atr_col       = [c for c in cols if c.startswith('ATRr_14')][0]
             obv_col       = [c for c in cols if c.startswith('OBV')][0]
@@ -182,6 +207,11 @@ class TechnicalAnalysis:
                 obv_pct    = max(-1.0, min(1.0, obv_pct))  # clip
                 vwap_dist  = (close_price - vwap_val) / vwap_val if vwap_val != 0 else 0.0
 
+                # Novas features V4 (sem CDL que requer TA-Lib)
+                rsi_slope  = rsi - float(df.iloc[-4][rsi_col]) if len(df) >= 4 else 0.0
+                ema20_val  = float(last_candle[ema_20_col]) if ema_20_col else close_price
+                ema20_dist = (close_price - ema20_val) / (close_price + 1e-9)
+
                 X_last = pd.DataFrame([{
                     'RSI':          rsi,
                     'MACDh':        macd_hist,
@@ -199,10 +229,10 @@ class TechnicalAnalysis:
                     'Upper_Wick':   last_candle['Upper_Wick'],
                     'Lower_Wick':   last_candle['Lower_Wick'],
                     'Wick_Ratio':   last_candle['Wick_Ratio'],
-                    'CDL_ENGULFING':   last_candle['CDL_ENGULFING'],
-                    'CDL_HAMMER':      last_candle['CDL_HAMMER'],
-                    'CDL_MORNINGSTAR': last_candle['CDL_MORNINGSTAR'],
-                    'Cup_and_Handle':  last_candle['Cup_and_Handle']
+                    'vol_ratio':    float(vol_ratio),
+                    'RSI_slope':    rsi_slope,
+                    'EMA20_dist':   ema20_dist,
+                    'Cup_and_Handle': last_candle['Cup_and_Handle']
                 }])[FEATURES]  # garante a ordem exata das features do treino
 
                 proba          = self.model.predict_proba(X_last)
@@ -235,6 +265,52 @@ class TechnicalAnalysis:
                 logger.error(f"Erro ao inferir ML: {e}")
                 ml_status = "ERROR"
 
+        # ── Modelo de Saída (Exit Model) — Fase 3.3 ─────────────────────────────
+        # Prediz a probabilidade de queda significativa nos próximos 15 minutos.
+        # Útil para sair de posições lucrativas ANTES de o SL ser atingido.
+        exit_prob = 0.0
+        if self.exit_model is not None and EXIT_FEATURES is not None:
+            try:
+                # Features adicionais necessárias apenas pelo exit model
+                rsi_series   = df[rsi_col]
+                bb_squeeze_v = (float(last_candle[bb_upper_col]) - float(last_candle[bb_lower_col])) / (close_price + 1e-9)
+                rsi_high_v   = float(rsi_series.iloc[-5:].max()) if len(rsi_series) >= 5 else rsi
+                bear_mom_v   = float(macd_hist - df.iloc[-3][macd_hist_col]) if len(df) >= 3 else 0.0
+
+                # Calcula EMA20 dist (pode não ter sido calculado se ema_20_col é None)
+                ema20_val_exit = float(last_candle[ema_20_col]) if ema_20_col else close_price
+                ema20_dist_exit = (close_price - ema20_val_exit) / (close_price + 1e-9)
+
+                X_exit = pd.DataFrame([{
+                    'RSI':           rsi,
+                    'MACDh':         macd_hist,
+                    'ATR_pct':       atr_value / close_price,
+                    'Dist_BBU':      (close_price - float(last_candle[bb_upper_col])) / close_price,
+                    'Dist_BBL':      (close_price - float(last_candle[bb_lower_col])) / close_price,
+                    'ret_1':         last_candle['ret_1'],
+                    'ret_2':         last_candle['ret_2'],
+                    'ret_3':         last_candle['ret_3'],
+                    'OBV_pct':       obv_pct,
+                    'VWAP_dist':     vwap_dist,
+                    'ROC_5':         last_candle[roc_5_col],
+                    'ROC_15':        last_candle[roc_15_col],
+                    'Body_Size':     last_candle['Body_Size'],
+                    'Upper_Wick':    last_candle['Upper_Wick'],
+                    'Lower_Wick':    last_candle['Lower_Wick'],
+                    'Wick_Ratio':    last_candle['Wick_Ratio'],
+                    'vol_ratio':     float(vol_ratio),
+                    'RSI_slope':     rsi - float(df.iloc[-4][rsi_col]) if len(df) >= 4 else 0.0,
+                    'EMA20_dist':    ema20_dist_exit,
+                    'Cup_and_Handle': last_candle['Cup_and_Handle'],
+                    'RSI_high':      rsi_high_v,
+                    'BB_squeeze':    bb_squeeze_v,
+                    'Bear_momentum': bear_mom_v,
+                }])[EXIT_FEATURES]
+
+                exit_prob = float(self.exit_model.predict_proba(X_exit)[0][1])
+            except Exception as e:
+                logger.debug(f"[EXIT MODEL] Erro na inferencia: {e}")
+
         return {
             "decision": decision,
             "analysis": {
@@ -246,7 +322,8 @@ class TechnicalAnalysis:
                 "vol_ratio":        round(float(vol_ratio), 3),
                 "ml_prob_success":  round(ml_prob_success, 4),
                 "ml_prob_fail":     round(ml_prob_fail, 4),
-                "ml_status":        ml_status
+                "ml_status":        ml_status,
+                "exit_prob":        round(exit_prob, 4)   # prob de queda — Fase 3.3
             },
             "timestamp": str(last_candle.name) if hasattr(last_candle, 'name') else str(datetime.now())
         }
