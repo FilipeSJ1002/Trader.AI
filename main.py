@@ -127,9 +127,11 @@ def performance():
     """
     Retorna o resumo de performance do bot:
     win rate, P&L total, P&L médio por trade, melhor/pior trade,
-    e P&L acumulado dos últimos 7 dias.
+    P&L acumulado dos últimos 7 dias e drawdown diário (Fase 4.2).
     """
-    return database.get_performance_summary()
+    summary = database.get_performance_summary()
+    summary["daily_drawdown"] = database.get_drawdown_summary()
+    return summary
 
 
 @app.get("/trades")

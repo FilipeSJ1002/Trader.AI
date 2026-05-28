@@ -85,21 +85,23 @@ async def start_stream():
                             analysis = market_state.append_new_candle(symbol, new_candle)
                             decision = analysis["decision"]
 
-                            analise   = analysis.get("analysis", {})
-                            rsi       = analise.get("rsi", "N/A")
-                            atr       = analise.get("atr", 0.0)
-                            buy_score = analise.get("buy_score", 0)
-                            regime    = analise.get("market_regime", "?")
-                            sig_5m    = analise.get("signal_5m", "?")
-                            vol_ratio = analise.get("vol_ratio", 0.0)
-                            ml_ok     = analise.get("ml_status", "?")
-                            exit_prob = analise.get("exit_prob", 0.0)  # Fase 3.3
+                            analise        = analysis.get("analysis", {})
+                            rsi            = analise.get("rsi", "N/A")
+                            atr            = analise.get("atr", 0.0)
+                            buy_score      = analise.get("buy_score", 0)
+                            regime         = analise.get("market_regime", "UNKNOWN")
+                            sig_5m         = analise.get("signal_5m", "?")
+                            vol_ratio      = analise.get("vol_ratio", 0.0)
+                            ml_ok          = analise.get("ml_status", "?")
+                            ml_prob        = analise.get("ml_prob_success", 0.65)   # Fase 4.1
+                            asset_strength = analise.get("asset_strength", "NEUTRAL")  # Fase 4.1
+                            exit_prob      = analise.get("exit_prob", 0.0)          # Fase 3.3
 
                             print(
                                 f"[TRADER.AI] {symbol} | ${preco_fechamento:.4f} | "
                                 f"RSI:{rsi} ATR:{atr:.4f} Vol:{vol_ratio:.2f}x | "
                                 f"Score:{buy_score} | Regime:{regime} 5M:{sig_5m} | "
-                                f"ML:{ml_ok} ExitP:{exit_prob:.2f} | => {decision}"
+                                f"ML:{ml_ok}({ml_prob:.2f}) Forca:{asset_strength} ExitP:{exit_prob:.2f} | => {decision}"
                             )
 
                             # ── Gestão de risco sempre ────────────────────────
@@ -113,7 +115,13 @@ async def start_stream():
                                     "COMPRA_FORTE":    1.0
                                 }
                                 peso = pesos.get(decision, 1.0)
-                                await execute_trade(symbol, decision, preco_fechamento, peso, atr)
+                                await execute_trade(
+                                    symbol, decision, preco_fechamento,
+                                    peso=peso, atr=atr,
+                                    ml_prob=ml_prob,           # Fase 4.1
+                                    asset_strength=asset_strength,
+                                    regime=regime,
+                                )
 
                             elif decision in ["VENDA_FORTE", "VENDA_MODERADA", "VENDA_LEVE"]:
                                 await execute_trade(symbol, decision, preco_fechamento, 1.0, atr)

@@ -1,15 +1,15 @@
 """
-database.py — V4
+database.py — V4 (Fase 4)
 Gerencia o banco de dados SQLite do Trader.AI.
 
 Tabelas:
   positions   — estado atual das posições abertas por símbolo
   trades_log  — histórico completo de trades (compras e vendas)
-                usado para calcular P&L, win rate e drawdown em tempo real
+  daily_stats — equity inicial do dia + flag de pausa por drawdown
 """
 import sqlite3
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "trading_state.db")
 
@@ -33,16 +33,34 @@ def init_db():
             tp_price       REAL    NOT NULL DEFAULT 0.0,
             last_buy_time  TEXT,
             partial_tp_hit INTEGER NOT NULL DEFAULT 0,
-            atr_value      REAL    NOT NULL DEFAULT 0.0
+            atr_value      REAL    NOT NULL DEFAULT 0.0,
+            tp1_price      REAL    NOT NULL DEFAULT 0.0,
+            tp1_hit        INTEGER NOT NULL DEFAULT 0
         )
     ''')
 
-    # Migração: renomear atr_distance → atr_value se a coluna antiga existir
-    try:
-        cursor.execute("ALTER TABLE positions RENAME COLUMN atr_distance TO atr_value")
-        conn.commit()
-    except Exception:
-        pass  # coluna já tem o nome correto ou não existe
+    # Migrações — colunas novas adicionadas em versões anteriores
+    migrations = [
+        "ALTER TABLE positions RENAME COLUMN atr_distance TO atr_value",
+        "ALTER TABLE positions ADD COLUMN tp1_price REAL NOT NULL DEFAULT 0.0",
+        "ALTER TABLE positions ADD COLUMN tp1_hit   INTEGER NOT NULL DEFAULT 0",
+    ]
+    for sql in migrations:
+        try:
+            cursor.execute(sql)
+            conn.commit()
+        except Exception:
+            pass  # coluna já existe ou renomeação desnecessária
+
+    # Tabela de estatísticas diárias — Fase 4.2
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS daily_stats (
+            date            TEXT PRIMARY KEY,  -- YYYY-MM-DD UTC
+            start_equity    REAL DEFAULT 0.0,  -- equity ao abrir o dia
+            min_equity      REAL DEFAULT 0.0,  -- mínimo intraday
+            trading_paused  INTEGER DEFAULT 0  -- 1 = compras pausadas por drawdown
+        )
+    ''')
 
     # Tabela de log de trades — nova na V4
     cursor.execute('''
@@ -80,15 +98,17 @@ def get_position(symbol: str) -> dict:
     if row:
         return dict(row)
     return {
-        "symbol":        symbol,
-        "qty":           0.0,
-        "avg_price":     0.0,
-        "highest_price": 0.0,
-        "sl_price":      0.0,
-        "tp_price":      0.0,
-        "last_buy_time": None,
+        "symbol":         symbol,
+        "qty":            0.0,
+        "avg_price":      0.0,
+        "highest_price":  0.0,
+        "sl_price":       0.0,
+        "tp_price":       0.0,
+        "last_buy_time":  None,
         "partial_tp_hit": 0,
-        "atr_value":     0.0
+        "atr_value":      0.0,
+        "tp1_price":      0.0,   # Fase 4.3 — TP em escada
+        "tp1_hit":        0,     # Fase 4.3
     }
 
 
@@ -101,13 +121,17 @@ def update_position(position_data: dict):
     if 'atr_distance' in data:
         data['atr_value'] = data.pop('atr_distance')
 
+    # Garante valores padrão para colunas novas (compatibilidade com dicts antigos)
+    data.setdefault('tp1_price', 0.0)
+    data.setdefault('tp1_hit',   0)
+
     cursor.execute('''
         INSERT INTO positions
             (symbol, qty, avg_price, highest_price, sl_price, tp_price,
-             last_buy_time, partial_tp_hit, atr_value)
+             last_buy_time, partial_tp_hit, atr_value, tp1_price, tp1_hit)
         VALUES
             (:symbol, :qty, :avg_price, :highest_price, :sl_price, :tp_price,
-             :last_buy_time, :partial_tp_hit, :atr_value)
+             :last_buy_time, :partial_tp_hit, :atr_value, :tp1_price, :tp1_hit)
         ON CONFLICT(symbol) DO UPDATE SET
             qty            = excluded.qty,
             avg_price      = excluded.avg_price,
@@ -116,7 +140,9 @@ def update_position(position_data: dict):
             tp_price       = excluded.tp_price,
             last_buy_time  = excluded.last_buy_time,
             partial_tp_hit = excluded.partial_tp_hit,
-            atr_value      = excluded.atr_value
+            atr_value      = excluded.atr_value,
+            tp1_price      = excluded.tp1_price,
+            tp1_hit        = excluded.tp1_hit
     ''', data)
     conn.commit()
     conn.close()
@@ -125,15 +151,17 @@ def update_position(position_data: dict):
 def clear_position(symbol: str):
     """Zera a posição de um símbolo."""
     update_position({
-        "symbol":        symbol,
-        "qty":           0.0,
-        "avg_price":     0.0,
-        "highest_price": 0.0,
-        "sl_price":      0.0,
-        "tp_price":      0.0,
-        "last_buy_time": None,
+        "symbol":         symbol,
+        "qty":            0.0,
+        "avg_price":      0.0,
+        "highest_price":  0.0,
+        "sl_price":       0.0,
+        "tp_price":       0.0,
+        "last_buy_time":  None,
         "partial_tp_hit": 0,
-        "atr_value":     0.0
+        "atr_value":      0.0,
+        "tp1_price":      0.0,
+        "tp1_hit":        0,
     })
 
 
@@ -235,6 +263,101 @@ def get_recent_trades(limit: int = 20) -> list:
     rows = [dict(r) for r in cursor.fetchall()]
     conn.close()
     return rows
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Proteção de Drawdown Diário (Fase 4.2)
+# ─────────────────────────────────────────────────────────────────────────────
+DAILY_DRAWDOWN_LIMIT = 0.03   # 3% de perda máxima por dia → pausa compras
+
+
+def _today_utc() -> str:
+    """Retorna a data atual UTC no formato YYYY-MM-DD."""
+    return datetime.now(timezone.utc).strftime('%Y-%m-%d')
+
+
+def get_daily_stats() -> dict:
+    """Retorna (ou cria) o registro de hoje."""
+    today = _today_utc()
+    conn  = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM daily_stats WHERE date = ?', (today,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if row:
+        return dict(row)
+    return {
+        'date':           today,
+        'start_equity':   0.0,
+        'min_equity':     0.0,
+        'trading_paused': 0,
+    }
+
+
+def update_daily_equity(current_equity: float) -> bool:
+    """
+    Atualiza o equity do dia e verifica se o drawdown diário foi atingido.
+    Retorna True se as compras devem ser pausadas.
+    Se for o primeiro registro do dia, define start_equity.
+    """
+    today  = _today_utc()
+    stats  = get_daily_stats()
+    conn   = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    # Primeiro registro do dia: define equity inicial
+    if stats['start_equity'] == 0.0:
+        stats['start_equity'] = current_equity
+        stats['min_equity']   = current_equity
+
+    stats['min_equity'] = min(stats['min_equity'], current_equity)
+
+    # Verifica se o drawdown diário foi atingido
+    if stats['start_equity'] > 0:
+        drawdown = (stats['start_equity'] - current_equity) / stats['start_equity']
+        if drawdown >= DAILY_DRAWDOWN_LIMIT:
+            stats['trading_paused'] = 1
+
+    cursor.execute('''
+        INSERT INTO daily_stats (date, start_equity, min_equity, trading_paused)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(date) DO UPDATE SET
+            start_equity   = CASE WHEN excluded.start_equity > 0 AND start_equity = 0
+                                  THEN excluded.start_equity ELSE start_equity END,
+            min_equity     = excluded.min_equity,
+            trading_paused = excluded.trading_paused
+    ''', (today, stats['start_equity'], stats['min_equity'], stats['trading_paused']))
+    conn.commit()
+    conn.close()
+
+    return bool(stats['trading_paused'])
+
+
+def is_trading_paused() -> bool:
+    """Retorna True se as compras estão pausadas por drawdown hoje."""
+    stats = get_daily_stats()
+    return bool(stats.get('trading_paused', 0))
+
+
+def get_drawdown_summary() -> dict:
+    """Retorna o resumo de drawdown do dia para o endpoint /performance."""
+    stats = get_daily_stats()
+    start = stats.get('start_equity', 0.0)
+    low   = stats.get('min_equity', 0.0)
+    if start > 0 and low > 0:
+        dd = (start - low) / start * 100
+    else:
+        dd = 0.0
+    return {
+        'date':            stats.get('date', _today_utc()),
+        'start_equity':    round(start, 2),
+        'min_equity':      round(low, 2),
+        'intraday_dd_pct': round(dd, 3),
+        'trading_paused':  bool(stats.get('trading_paused', 0)),
+        'dd_limit_pct':    DAILY_DRAWDOWN_LIMIT * 100,
+    }
 
 
 # Inicializa o banco ao importar o módulo

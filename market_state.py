@@ -74,9 +74,15 @@ def _resample_and_store(symbol: str, df_1m: pd.DataFrame):
     src = df_1m.tail(1500) if len(df_1m) > 1500 else df_1m
 
     try:
-        agg = {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}
-        history_5m[symbol]  = src.resample('5min').agg(agg).dropna()
-        history_15m[symbol] = src.resample('15min').agg(agg).dropna()
+        for period, store in (('5min', history_5m), ('15min', history_15m)):
+            rs = src.resample(period)
+            store[symbol] = pd.DataFrame({
+                'open':   rs['open'].first(),
+                'high':   rs['high'].max(),
+                'low':    rs['low'].min(),
+                'close':  rs['close'].last(),
+                'volume': rs['volume'].sum(),
+            }).dropna()
     except Exception as e:
         logger.warning(f"[MTF] Erro ao resamplear {symbol}: {e}")
 
