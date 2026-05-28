@@ -3,9 +3,12 @@ import os
 import glob
 
 CAMINHOS_PASTAS = {
-    "BTCUSDT": r"C:\Users\filip\Downloads\datasets_brutos\BTC-USDT_datasets_brutos",
-    "ETHUSDT": r"C:\Users\filip\Downloads\datasets_brutos\ETH-USDT_datasets_brutos",
-    "XRPUSDT": r"C:\Users\filip\Downloads\datasets_brutos\XRP-USDT_datasets_brutos"
+    "BTCUSDT":  r"C:\Users\filip\Downloads\datasets_brutos\BTC-USDT_datasets_brutos",
+    "ETHUSDT":  r"C:\Users\filip\Downloads\datasets_brutos\ETH-USDT_datasets_brutos",
+    "XRPUSDT":  r"C:\Users\filip\Downloads\datasets_brutos\XRP-USDT_datasets_brutos",
+    "SOLUSDT":  r"C:\Users\filip\Downloads\datasets_brutos\SOL-USDT_datasets_brutos",
+    "BNBUSDT":  r"C:\Users\filip\Downloads\datasets_brutos\BNB-USDT_datasets_brutos",
+    "AVAXUSDT": r"C:\Users\filip\Downloads\datasets_brutos\AVAX-USDT_datasets_brutos",
 }
 
 def processar_dados():
