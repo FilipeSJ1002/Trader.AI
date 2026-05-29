@@ -70,7 +70,7 @@ def _print_results(label: str, eq: pd.DataFrame, initial_balance: float, n_rebal
     print(f"  CAGR          :  {s['cagr']:>10.1f}% / ano")
     print(f"  Max Drawdown  :  {s['dd']:>10.1f}%")
     print(f"  Rebalances    :  {n_rebal:>10}")
-    print(f"{'─' * 62}")
+    print(f"{'-' * 62}")
     print("  Retorno por ano:")
     eq2 = eq.copy()
     eq2['cm'] = eq2['equity'].cummax()
@@ -205,10 +205,10 @@ def run_monthly(year: int, fee: float = 0.001, max_invest: float = 0.98):
     print(f"  BACKTEST MENSAL — {year}   (Trader.AI V7)")
     print(f"{'=' * 70}")
     print(f"  {'Mes':<12}  {'Retorno':>8}  {'Acumulado':>10}  {'DD Mes':>8}  {'Estado BTC':>11}  {'Lider momentum'}")
-    print(f"{'─' * 70}")
+    print(f"{'-' * 70}")
 
     accumulated = eq_start_val
-    from trend_strategy import get_state, _momentum, _sma, SMA_PERIOD, SMA_FAST
+    from trend_strategy import get_state, _rel_momentum, _sma, SMA_PERIOD, SMA_FAST, _btc_in_bull
 
     for month in range(1, 13):
         eq_m = eq_year[eq_year.index.month == month]
@@ -225,14 +225,17 @@ def run_monthly(year: int, fee: float = 0.001, max_invest: float = 0.98):
         accumulated = end_val
         acum_pct    = (accumulated / eq_start_val - 1) * 100
 
-        # Ultimo dia do mes: estado do BTC e lider de momentum
+        # Ultimo dia do mes: estado do BTC e lider de momentum relativo
         last_day_idx = px_full.index.searchsorted(eq_m.index[-1])
         hist_at_end  = {s: px_full[s].iloc[:last_day_idx + 1] for s in syms}
 
-        btc_state    = get_state(hist_at_end.get("BTCUSDT"))
-        mom_scores   = {s: _momentum(hist_at_end[s], 90) for s in syms}
-        top_sym      = max(mom_scores, key=lambda k: mom_scores[k])
-        top_mom_pct  = mom_scores[top_sym] * 100
+        btc_hist     = hist_at_end.get("BTCUSDT")
+        btc_bull     = _btc_in_bull(btc_hist)
+        btc_state    = "BULL" if btc_bull else "BEAR"
+        rel_scores   = {s: _rel_momentum(hist_at_end[s], btc_hist, 21)
+                        for s in syms if s != "BTCUSDT"}
+        top_sym      = max(rel_scores, key=lambda k: rel_scores[k])
+        top_mom_pct  = rel_scores[top_sym] * 100
 
         # Barra visual de retorno
         bar_len = min(abs(int(month_ret / 3)), 12)
@@ -248,7 +251,7 @@ def run_monthly(year: int, fee: float = 0.001, max_invest: float = 0.98):
     btc_year  = px_full["BTCUSDT"][px_full.index.year == year]
     btc_ret   = (btc_year.iloc[-1] / btc_year.iloc[0] - 1) * 100 if len(btc_year) > 1 else 0
 
-    print(f"{'─' * 70}")
+    print(f"{'-' * 70}")
     print(f"  {'ANO ' + str(year):<12}  {year_ret:>+7.2f}%")
     print(f"  {'BTC hold':<12}  {btc_ret:>+7.2f}%  (benchmark)")
     print(f"{'=' * 70}\n")

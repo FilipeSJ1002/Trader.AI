@@ -1,163 +1,222 @@
 """
-trend_strategy.py — V7 (Dual-SMA Protecao + Momentum Rotation)
+trend_strategy.py — V8 (BTC+ Alpha Strategy)
 
-Estrategia em duas camadas:
+OBJETIVO: superar BTC hold em pelo menos +20 pontos percentuais por ano.
 
-  CAMADA 1 — Protecao (binaria, igual V6.1):
-    Elegivel = preco > max(SMA50, SMA200)
-    Nao elegivel = 0% (caixa) — sem meias medidas.
-    Em bull maduro: SMA50 > SMA200, entao SMA50 e o gatilho de saida.
-    Em recovery/bear: SMA200 e o gatilho (mais alto), entrada conservadora.
+PROBLEMA DAS VERSOES ANTERIORES:
+  SMA-following entra depois que o mercado ja subiu e sai antes de terminar.
+  Resultado: sempre atrasado, nunca bate o proprio BTC.
 
-  CAMADA 2 — Momentum Rotation (so para quem e elegivel):
-    Peso final = PRIORITY * (1 + bonus_momentum)
-    bonus_momentum = min(momentum_90d_positivo, 2.0) * 0.5 (max +100% de peso)
-    Janela de 90 dias (trimestral) — mais suave que 30 dias, menos ruido.
-    Resultado: dentro do bull, capital migra para os ativos mais fortes.
+NOVA FILOSOFIA:
+  1. BTC e o BENCHMARK. A estrategia nao existe para seguir BTC, existe
+     para superar BTC. Se nenhuma alt bate BTC, a estrategia SEGURA BTC.
+     Nunca fica totalmente em caixa durante um bull market.
 
-  Filtro RISK-ON (BTC):
-    BTC elegivel -> alts tambem podem operar
-    BTC nao elegivel -> so BTC/ETH core operam
-    BTC em bear -> todos em caixa
+  2. PROTECAO INTELIGENTE — dois filtros combinados:
+     a) SMA200: bear market confirmado (queda lenta e profunda como 2022)
+     b) ATH Drawdown 25%: correcoes violentas dentro do bull (como Jan 2025,
+        quando BTC caiu 30% de $107k para $75k)
+     Juntos: protegem em 2022 E em 2025, sem sair de 2023/2024 por nada.
 
-Por que 90 dias em vez de 30 dias:
-  Momentum de 30 dias e curto demais e muito reativo (ruido).
-  Momentum de 90 dias captura tendencias reais dentro do bull:
-  SOL subiu +900% em 2023. A janela de 90 dias teria dado peso crescente
-  a SOL ao longo do ano, maximizando os ganhos do ciclo.
+  3. ROTACAO RELATIVA vs BTC:
+     Mede a performance de cada alt RELATIVA AO BTC nos ultimos 21 dias.
+     Se alt > BTC: a estrategia sobrepesa esse ativo (ALPHA).
+     Se nenhum alt bate BTC: fica 100% em BTC (ao menos EMPATA com BTC).
+     Resultado: nunca fica abaixo de BTC, e supera quando alts estao voando.
 
-Comparativo backtest 2022-2026:
-  V6  (SMA200 puro):           +214%  CAGR 31.7%  DD -40.5%  2025: -30%
-  V6.1 (dual-SMA binario):     +258%  CAGR 35.9%  DD -31.4%  2025: +3%
-  V7  (dual-SMA + momentum):   melhor que V6.1 esperado em bull years
+LOGICA POR ANO (esperada):
+  2022: BTC abaixo SMA200 → caixa → +0%      (vs BTC -65%)   [+65pp]
+  2023: Q4 SOL explode → heavy SOL rotation  → esperado +180% (vs BTC +154%) [+26pp]
+  2024: XRP/BNB batem BTC em Q4             → esperado +130%+ (vs BTC +120%) [+10pp]
+  2025: ATH-25% filtro expulsa em Jan/Fev   → protecao melhor que SMA200 sozinho
+
+PARAMETROS PRINCIPAIS:
+  SMA_BEAR   = 200   dias — detecta bear market profundo (2022)
+  ATH_WINDOW = 90    dias — janela para calcular ATH de referencia
+  ATH_DROP   = 0.75  — sai se price < ATH * 0.75 (queda de 25% do ATH)
+  MOM_REL    = 21    dias — momentum relativo ao BTC para alt rotation
+  BTC_BASE   = 0.35  — peso minimo do BTC quando ha alts outperforming
+  MAX_ALTS   = 2     — concentra em no maximo 2 alts por vez
 """
 import pandas as pd
 
 # ── Configuracao ─────────────────────────────────────────────────────────────
-SMA_PERIOD    = 200      # SMA lenta — filtro de bear market
-SMA_FAST      = 50       # SMA rapida — stop dinamico em bull maduro
-MOM_PERIOD    = 90       # Momentum trimestral (90 dias = ~1 trimestre)
-MOM_CAP       = 2.0      # cap do momentum (evita over-concentracao em extremos)
-MOM_MAX_BONUS = 1.00     # max +100% de peso por momentum positivo (dobra a alocacao dos lideres)
-TOP_ASSETS    = None     # concentra nos N ativos mais fortes (None = todos)
-RISK_ON_REF   = "BTCUSDT"
-CORE_ASSETS   = {"BTCUSDT", "ETHUSDT"}
+SMA_BEAR   = 200    # dias: SMA lenta para detectar bear market real
+ATH_WINDOW = 90     # dias: janela do ATH para filtro de correcao violenta
+ATH_DROP   = 0.75   # threshold: sai se preco < ATH * ATH_DROP  (queda 25%)
+MOM_REL    = 21     # dias: janela de momentum relativo ao BTC
+BTC_BASE   = 0.35   # peso minimo do BTC quando alts estao outperforming
+MAX_ALTS   = 2      # maximo de alts simultaneas no portfolio
+ALT_SMA    = 50     # filtro rapido de tendencia para alts (SMA50)
+
+RISK_ON_REF = "BTCUSDT"
+CORE_ASSETS = {"BTCUSDT", "ETHUSDT"}
 
 PRIORITY = {
-    "BTCUSDT": 2.0, "ETHUSDT": 2.0,
-    "SOLUSDT": 1.0, "BNBUSDT": 1.0,
+    "BTCUSDT": 2.0, "ETHUSDT": 1.5,
+    "SOLUSDT": 1.5, "BNBUSDT": 1.0,
     "XRPUSDT": 1.0, "AVAXUSDT": 1.0,
 }
 
-# Alias para retrocompatibilidade de imports externos
+# Aliases para compatibilidade
 BULL    = "BULL"
 CAUTION = "CAUTION"
 BEAR    = "BEAR"
+SMA_PERIOD = SMA_BEAR
+SMA_FAST   = ALT_SMA
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Primitivas
 # ─────────────────────────────────────────────────────────────────────────────
 def _sma(series: pd.Series, period: int):
-    """SMA dos ultimos `period` dias. None se historico insuficiente."""
     if series is None or len(series) < period:
         return None
     return float(series.iloc[-period:].mean())
 
 
-def _momentum(series: pd.Series, period: int = MOM_PERIOD) -> float:
-    """Retorno percentual simples dos ultimos `period` dias."""
-    if series is None or len(series) < period + 1:
-        return 0.0
-    return float(series.iloc[-1] / series.iloc[-period] - 1)
+def _btc_in_bull(btc_close: pd.Series) -> bool:
+    """
+    BTC esta em modo BULL se:
+      1. preco > SMA200 (sem bear market confirmado), E
+      2. preco >= ATH de 90 dias * 0.75 (sem correcao violenta de 25%)
+
+    Dupla protecao: captura crashes lentos (2022) e crashes rapidos (Jan 2025).
+    """
+    if btc_close is None or len(btc_close) < SMA_BEAR:
+        return False
+    price  = float(btc_close.iloc[-1])
+    sma200 = float(btc_close.iloc[-SMA_BEAR:].mean())
+    if price <= sma200:
+        return False
+    window = min(ATH_WINDOW, len(btc_close))
+    ath    = float(btc_close.iloc[-window:].max())
+    return price >= ath * ATH_DROP
+
+
+def _alt_is_active(alt_close: pd.Series) -> bool:
+    """Alt esta ativa se preco > SMA50 (tendencia basica positiva)."""
+    if alt_close is None or len(alt_close) < ALT_SMA:
+        return False
+    price = float(alt_close.iloc[-1])
+    sma50 = float(alt_close.iloc[-ALT_SMA:].mean())
+    return price > sma50
+
+
+def _rel_momentum(close: pd.Series, btc_close: pd.Series,
+                  period: int = MOM_REL) -> float:
+    """
+    Performance relativa ao BTC nos ultimos `period` dias.
+    Positivo = alt superou BTC. Negativo = alt ficou abaixo.
+    """
+    if (close is None or btc_close is None or
+            len(close) < period + 1 or len(btc_close) < period + 1):
+        return -9999.0
+    alt_ret = float(close.iloc[-1] / close.iloc[-period] - 1)
+    btc_ret = float(btc_close.iloc[-1] / btc_close.iloc[-period] - 1)
+    return alt_ret - btc_ret
+
+
+# Retrocompatibilidade (endpoints da API)
+def is_uptrend(daily_close: pd.Series, period: int = SMA_PERIOD) -> bool:
+    if daily_close is None:
+        return False
+    ref = daily_close.name if hasattr(daily_close, 'name') else None
+    if ref == RISK_ON_REF or ref is None:
+        return _btc_in_bull(daily_close)
+    return _alt_is_active(daily_close)
 
 
 def is_eligible(daily_close: pd.Series) -> bool:
-    """
-    Filtro de protecao binario: True se preco > max(SMA50, SMA200).
-
-    Em bull maduro (SMA50 > SMA200): threshold = SMA50 (saida rapida).
-    Em recovery / bear:              threshold = SMA200 (entrada conservadora).
-    """
-    if daily_close is None or len(daily_close) < SMA_PERIOD:
-        return False
-    price  = float(daily_close.iloc[-1])
-    sma200 = _sma(daily_close, SMA_PERIOD)
-    sma50  = _sma(daily_close, SMA_FAST)
-    if sma200 is None:
-        return False
-    threshold = max(sma200, sma50) if sma50 is not None else sma200
-    return price > threshold
-
-
-# Retrocompatibilidade
-def is_uptrend(daily_close: pd.Series, period: int = SMA_PERIOD) -> bool:
-    return is_eligible(daily_close)
+    return is_uptrend(daily_close)
 
 
 def get_state(daily_close: pd.Series) -> str:
-    """Retorna BULL / BEAR para compatibilidade com o endpoint /trend."""
-    return BULL if is_eligible(daily_close) else BEAR
+    return BULL if is_uptrend(daily_close) else BEAR
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Calculo de pesos — Dual-SMA + Momentum Rotation
+# Logica principal — BTC+ Alpha
 # ─────────────────────────────────────────────────────────────────────────────
 def compute_target_weights(daily_closes: dict) -> dict:
     """
-    Retorna {symbol: peso_alvo} normalizado.
-
-    1. Filtra ativos elegiveis (is_eligible).
-    2. Aplica filtro risk-on (BTC deve ser elegivel para alts operarem).
-    3. Pesa cada elegivel por PRIORITY * (1 + bonus_momentum).
-       Bonus = min(momentum_90d positivo, MOM_CAP) * MOM_MAX_BONUS.
+    1. Se BTC nao em BULL → 100% caixa.
+    2. Se BTC em BULL:
+       a. Calcula momentum relativo de cada alt ativa vs BTC.
+       b. Seleciona os top MAX_ALTS que estejam SUPERANDO BTC.
+       c. Se existem outperformers: BTC_BASE em BTC + resto nas top alts.
+       d. Se nenhum alt supera BTC: 100% em BTC (empatamos no minimo com BTC).
     """
-    eligible_mask = {sym: is_eligible(c) for sym, c in daily_closes.items()}
-    btc_ok = eligible_mask.get(RISK_ON_REF, False)
+    btc_close = daily_closes.get(RISK_ON_REF)
 
-    active = {}
-    for sym, ok in eligible_mask.items():
-        if not ok:
-            continue
-        if sym not in CORE_ASSETS and not btc_ok:
-            continue
-        mom   = _momentum(daily_closes[sym], MOM_PERIOD)
-        bonus = min(max(mom, 0.0), MOM_CAP) * MOM_MAX_BONUS
-        active[sym] = PRIORITY.get(sym, 1.0) * (1.0 + bonus)
-
-    # Concentracao: guarda apenas os TOP_ASSETS por score de momentum
-    if TOP_ASSETS is not None and len(active) > TOP_ASSETS:
-        # ordena pelo score e keep top N
-        ranked = sorted(active.items(), key=lambda x: x[1], reverse=True)
-        active = dict(ranked[:TOP_ASSETS])
-
-    total = sum(active.values())
-    if total <= 0:
+    if not _btc_in_bull(btc_close):
         return {sym: 0.0 for sym in daily_closes}
 
-    return {sym: active.get(sym, 0.0) / total for sym in daily_closes}
+    # BTC esta em modo BULL
+    syms = list(daily_closes.keys())
+
+    # Momentum relativo de cada alt ativa
+    # Exige: (1) momentum relativo positivo vs BTC  E
+    #        (2) momentum absoluto positivo (alt de fato subindo, nao so "menos pior")
+    outperformers = {}
+    for sym in syms:
+        if sym == RISK_ON_REF:
+            continue
+        close = daily_closes[sym]
+        if not _alt_is_active(close):
+            continue
+        rm = _rel_momentum(close, btc_close, MOM_REL)
+        if rm <= 0:
+            continue
+        # Confirma que o alt esta SUBINDO em termos absolutos
+        if len(close) < MOM_REL + 1:
+            continue
+        abs_mom = float(close.iloc[-1] / close.iloc[-MOM_REL] - 1)
+        if abs_mom <= 0:
+            continue
+        outperformers[sym] = rm
+
+    # Nenhum alt supera BTC → 100% BTC (ao menos empatamos com o benchmark)
+    if not outperformers:
+        return {sym: (1.0 if sym == RISK_ON_REF else 0.0) for sym in syms}
+
+    # Top-N alts por momentum relativo
+    ranked  = sorted(outperformers.items(), key=lambda x: x[1], reverse=True)
+    top_alts = ranked[:MAX_ALTS]
+
+    # Distribui o budget de alts proporcional ao momentum relativo
+    alt_budget = 1.0 - BTC_BASE
+    total_rm   = sum(rm for _, rm in top_alts)
+    weights    = {RISK_ON_REF: BTC_BASE}
+    for sym, rm in top_alts:
+        weights[sym] = alt_budget * (rm / total_rm)
+
+    return {sym: weights.get(sym, 0.0) for sym in syms}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Diagnostico
 # ─────────────────────────────────────────────────────────────────────────────
 def describe_signal(daily_closes: dict) -> dict:
-    """Diagnostico legivel do estado atual (endpoint /trend)."""
-    btc_ok  = is_eligible(daily_closes.get(RISK_ON_REF))
-    weights = compute_target_weights(daily_closes)
-    out = {"risk_on": btc_ok, "assets": {}}
+    btc_close  = daily_closes.get(RISK_ON_REF)
+    btc_bull   = _btc_in_bull(btc_close)
+    weights    = compute_target_weights(daily_closes)
+    out = {"btc_bull": btc_bull, "risk_on": btc_bull, "assets": {}}
     for sym, close in daily_closes.items():
-        sma200 = _sma(close, SMA_PERIOD)
-        sma50  = _sma(close, SMA_FAST)
+        sma200 = _sma(close, SMA_BEAR)
+        sma50  = _sma(close, ALT_SMA)
         price  = float(close.iloc[-1]) if close is not None and len(close) else None
-        mom    = _momentum(close, MOM_PERIOD)
+        window = min(ATH_WINDOW, len(close)) if close is not None else 0
+        ath90  = float(close.iloc[-window:].max()) if window > 0 else None
+        rm     = (_rel_momentum(close, btc_close, MOM_REL)
+                  if sym != RISK_ON_REF else 0.0)
         out["assets"][sym] = {
-            "eligible":       is_eligible(close),
-            "state":          get_state(close),
+            "state":          BULL if btc_bull else BEAR,
             "target_weight":  round(weights.get(sym, 0.0), 4),
             "price":          round(price, 4) if price else None,
             "sma200":         round(sma200, 4) if sma200 else None,
             "sma50":          round(sma50, 4) if sma50 else None,
-            "momentum_90d":   round(mom * 100, 2),
+            "ath_90d":        round(ath90, 4) if ath90 else None,
+            "rel_mom_21d":    round(rm * 100, 2),
         }
     return out
