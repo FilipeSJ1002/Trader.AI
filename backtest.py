@@ -1,9 +1,12 @@
 """
-backtest.py — V7 (Three-State Momentum Trend)
-Usa trend_strategy.compute_target_weights() — MESMA logica da producao.
+backtest.py -- V8 (BTC+ Alpha Strategy)
+Usa trend_strategy.compute_target_weights() -- MESMA logica da producao.
 
-Estados: BULL (100% + momentum bonus) | CAUTION (50% so core) | BEAR (caixa)
-Momentum rotation: mais capital nos ativos mais fortes no bull.
+Estados:
+  BULL: BTC acima SMA200 + dentro de 25% do ATH de 90 dias
+        -> 35% BTC + top-2 alts com momentum relativo positivo vs BTC
+        -> Se nenhuma alt supera BTC: 100% BTC
+  BEAR: caixa (100% cash)
 
 Uso:
   python backtest.py              -> resultados anuais 2022-2026
@@ -15,7 +18,7 @@ import sys
 import pandas as pd
 import plotly.graph_objects as go
 from dotenv import load_dotenv
-from trend_strategy import compute_target_weights, PRIORITY, SMA_PERIOD, SMA_FAST
+from trend_strategy import compute_target_weights, PRIORITY
 
 
 def _simulate(px: pd.DataFrame, initial_balance: float,
@@ -51,9 +54,7 @@ def _stats(eq: pd.DataFrame, initial_balance: float):
     """Calcula metricas de performance."""
     final     = eq['equity'].iloc[-1]
     total_ret = (final - initial_balance) / initial_balance * 100
-    eq2       = eq.copy()
-    eq2['cm'] = eq2['equity'].cummax()
-    max_dd    = ((eq2['equity'] - eq2['cm']) / eq2['cm']).min() * 100
+    max_dd    = ((eq['equity'] - eq['equity'].cummax()) / eq['equity'].cummax()).min() * 100
     days      = (eq.index[-1] - eq.index[0]).days
     cagr      = ((final / initial_balance) ** (365 / max(days, 1)) - 1) * 100
     return {'final': final, 'ret': total_ret, 'cagr': cagr, 'dd': max_dd, 'days': days}
@@ -72,10 +73,9 @@ def _print_results(label: str, eq: pd.DataFrame, initial_balance: float, n_rebal
     print(f"  Rebalances    :  {n_rebal:>10}")
     print(f"{'-' * 62}")
     print("  Retorno por ano:")
-    eq2 = eq.copy()
-    eq2['cm'] = eq2['equity'].cummax()
-    for yr in sorted(set(eq.index.year)):
-        e = eq[eq.index.year == yr]['equity']
+    eq_idx = pd.DatetimeIndex(eq.index)
+    for yr in sorted(set(eq_idx.year)):
+        e = eq[eq_idx.year == yr]['equity']
         if len(e) > 2:
             r = (e.iloc[-1] / e.iloc[0] - 1) * 100
             d = ((e - e.cummax()) / e.cummax()).min() * 100
@@ -94,7 +94,7 @@ def run_backtest(start="2022-01-01", end="2026-02-28", initial_balance=10_000.0,
     for s in syms:
         path = os.path.join("data", f"{s}_1m.parquet")
         if not os.path.exists(path):
-            print(f"  [AVISO] {path} ausente — pulando {s}")
+            print(f"  [AVISO] {path} ausente -- pulando {s}")
             continue
         df = pd.read_parquet(path)
         if 'date' in df.columns:
@@ -106,23 +106,20 @@ def run_backtest(start="2022-01-01", end="2026-02-28", initial_balance=10_000.0,
     print(f"Periodo: {px.index[0].date()} a {px.index[-1].date()} "
           f"| {len(px)} dias | {len(px.columns)} ativos")
 
-    # ── V7 (estrategia ativa) ────────────────────────────────────────────────
-    eq_v7, n7 = _simulate(px, initial_balance, fee, max_invest)
-    sv7 = _print_results("V7 — Three-State + Momentum Rotation", eq_v7, initial_balance, n7)
+    eq_v8, n8 = _simulate(px, initial_balance, fee, max_invest)
+    sv8 = _print_results("V8 -- BTC+ Alpha Strategy", eq_v8, initial_balance, n8)
 
-    # ── Benchmark buy & hold (equal weight) ─────────────────────────────────
     bh     = (1 + rets.mean(axis=1)).cumprod() * initial_balance
     bh_ret = (bh.iloc[-1] - initial_balance) / initial_balance * 100
     bh_dd  = ((bh - bh.cummax()) / bh.cummax()).min() * 100
     print(f"\n  [Benchmark Buy & Hold]  ret {bh_ret:+.1f}%  |  Max DD {bh_dd:.1f}%")
 
-    # ── Grafico ──────────────────────────────────────────────────────────────
     print("\nGerando relatorio visual...")
     fig = go.Figure()
 
     fig.add_trace(go.Scatter(
-        x=eq_v7.index, y=eq_v7['equity'],
-        name='V7 Three-State + Momentum',
+        x=eq_v8.index, y=eq_v8['equity'],
+        name='V8 BTC+ Alpha Strategy',
         line=dict(color='#00ff88', width=2.5)))
 
     fig.add_trace(go.Scatter(
@@ -131,15 +128,15 @@ def run_backtest(start="2022-01-01", end="2026-02-28", initial_balance=10_000.0,
         line=dict(color='#888888', width=1.2, dash='dot')))
 
     fig.update_layout(
-        title=(f"Trader.AI V7 | Retorno {sv7['ret']:.0f}% | "
-               f"CAGR {sv7['cagr']:.0f}%/ano | Max DD {sv7['dd']:.0f}%"),
+        title=(f"Trader.AI V8 | Retorno {sv8['ret']:.0f}% | "
+               f"CAGR {sv8['cagr']:.0f}%/ano | Max DD {sv8['dd']:.0f}%"),
         xaxis_title="Data", yaxis_title="Portfolio (USD)",
         template="plotly_dark", hovermode="x unified",
         yaxis_type="log", legend=dict(x=0.01, y=0.99),
         annotations=[dict(
-            text=("Estrategia: SMA50/SMA200 Three-State + Momentum Rotation<br>"
-                  "BULL: 100% investido + bonus momentum | "
-                  "CAUTION: 50% so BTC/ETH | BEAR: 100% caixa"),
+            text=("Estrategia: SMA200 + ATH-25% + Momentum Relativo vs BTC<br>"
+                  "BULL: 35% BTC + top-2 alts outperformers | "
+                  "BULL sem alts: 100% BTC | BEAR: 100% caixa"),
             xref="paper", yref="paper", x=0.01, y=0.01,
             showarrow=False, font=dict(size=10, color="#aaaaaa"),
             align="left"
@@ -149,7 +146,7 @@ def run_backtest(start="2022-01-01", end="2026-02-28", initial_balance=10_000.0,
     report_path = os.path.join(os.path.dirname(__file__), "backtest_report.html")
     fig.write_html(report_path)
     print(f"[OK] Relatorio salvo: {report_path}")
-    return sv7
+    return sv8
 
 
 MONTHS_PT = {
@@ -162,13 +159,12 @@ MONTHS_PT = {
 def run_monthly(year: int, fee: float = 0.001, max_invest: float = 0.98):
     """
     Exibe o breakdown mensal do ano escolhido:
-    retorno mensal, DD do mes, estado medio do BTC e ativos top por momentum.
+    retorno mensal, DD do mes, estado do BTC e ativo lider de momentum.
     """
     load_dotenv()
     syms = list(PRIORITY.keys())
 
-    # Carrega dados com 200 dias de warmup antes do ano escolhido
-    warmup_start = f"{year - 1}-01-01"   # 1 ano antes garante SMA200 pronto
+    warmup_start = f"{year - 1}-01-01"
     end          = f"{year}-12-31"
 
     closes = {}
@@ -186,37 +182,31 @@ def run_monthly(year: int, fee: float = 0.001, max_invest: float = 0.98):
         print(f"[ERRO] Sem dados para {year}. Verifique os arquivos em data/")
         return
 
-    rets_full = px_full.pct_change().fillna(0)
-
-    # Simula o ano inteiro (com warmup para SMA200)
     eq_series, _ = _simulate(px_full, 10_000.0, fee, max_invest)
 
-    # Filtra apenas o ano solicitado
-    eq_year = eq_series[eq_series.index.year == year]
+    eq_year = eq_series[pd.DatetimeIndex(eq_series.index).year == year]
     if eq_year.empty:
         print(f"[ERRO] Ano {year} fora do intervalo de dados disponivel.")
         return
 
-    # Preco inicial do ano (ultimo dia do ano anterior ou primeiro do ano)
     eq_start_idx = eq_series.index.searchsorted(eq_year.index[0])
     eq_start_val = eq_series['equity'].iloc[max(0, eq_start_idx - 1)]
 
     print(f"\n{'=' * 70}")
-    print(f"  BACKTEST MENSAL — {year}   (Trader.AI V7)")
+    print(f"  BACKTEST MENSAL -- {year}   (Trader.AI V8)")
     print(f"{'=' * 70}")
     print(f"  {'Mes':<12}  {'Retorno':>8}  {'Acumulado':>10}  {'DD Mes':>8}  {'Estado BTC':>11}  {'Lider momentum'}")
     print(f"{'-' * 70}")
 
-    accumulated = eq_start_val
-    from trend_strategy import get_state, _rel_momentum, _sma, SMA_PERIOD, SMA_FAST, _btc_in_bull
+    from trend_strategy import _rel_momentum, _btc_in_bull
 
+    accumulated = eq_start_val
     for month in range(1, 13):
-        eq_m = eq_year[eq_year.index.month == month]
+        eq_m = eq_year[pd.DatetimeIndex(eq_year.index).month == month]
         if eq_m.empty:
             print(f"  {MONTHS_PT[month]:<12}  {'sem dados':>8}")
             continue
 
-        # Retorno e drawdown do mes
         eq_m_vals   = eq_m['equity']
         start_val   = accumulated
         end_val     = eq_m_vals.iloc[-1]
@@ -225,19 +215,17 @@ def run_monthly(year: int, fee: float = 0.001, max_invest: float = 0.98):
         accumulated = end_val
         acum_pct    = (accumulated / eq_start_val - 1) * 100
 
-        # Ultimo dia do mes: estado do BTC e lider de momentum relativo
         last_day_idx = px_full.index.searchsorted(eq_m.index[-1])
         hist_at_end  = {s: px_full[s].iloc[:last_day_idx + 1] for s in syms}
 
-        btc_hist     = hist_at_end.get("BTCUSDT")
-        btc_bull     = _btc_in_bull(btc_hist)
-        btc_state    = "BULL" if btc_bull else "BEAR"
-        rel_scores   = {s: _rel_momentum(hist_at_end[s], btc_hist, 21)
-                        for s in syms if s != "BTCUSDT"}
-        top_sym      = max(rel_scores, key=lambda k: rel_scores[k])
-        top_mom_pct  = rel_scores[top_sym] * 100
+        btc_hist  = hist_at_end["BTCUSDT"]
+        btc_state = "BULL" if _btc_in_bull(btc_hist) else "BEAR"
 
-        # Barra visual de retorno
+        rel_scores  = {s: _rel_momentum(hist_at_end[s], btc_hist, 21)
+                       for s in syms if s != "BTCUSDT"}
+        top_sym     = max(rel_scores, key=lambda k: rel_scores[k])
+        top_mom_pct = rel_scores[top_sym] * 100
+
         bar_len = min(abs(int(month_ret / 3)), 12)
         bar     = ("+" if month_ret >= 0 else "-") + "#" * bar_len
 
@@ -245,11 +233,9 @@ def run_monthly(year: int, fee: float = 0.001, max_invest: float = 0.98):
               f"{month_dd:>7.1f}%  {btc_state:>11}  "
               f"{top_sym} {top_mom_pct:+.0f}%  {bar}")
 
-    # Resumo do ano
-    year_ret  = (accumulated / eq_start_val - 1) * 100
-    # Benchmark BTC no ano
-    btc_year  = px_full["BTCUSDT"][px_full.index.year == year]
-    btc_ret   = (btc_year.iloc[-1] / btc_year.iloc[0] - 1) * 100 if len(btc_year) > 1 else 0
+    year_ret = (accumulated / eq_start_val - 1) * 100
+    btc_year = px_full["BTCUSDT"][pd.DatetimeIndex(px_full.index).year == year]
+    btc_ret  = (btc_year.iloc[-1] / btc_year.iloc[0] - 1) * 100 if len(btc_year) > 1 else 0
 
     print(f"{'-' * 70}")
     print(f"  {'ANO ' + str(year):<12}  {year_ret:>+7.2f}%")

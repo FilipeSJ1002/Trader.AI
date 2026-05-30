@@ -9,7 +9,7 @@ PROBLEMA DAS VERSOES ANTERIORES:
 
 NOVA FILOSOFIA:
   1. BTC e o BENCHMARK. A estrategia nao existe para seguir BTC, existe
-     para superar BTC. Se nenhuma alt bate BTC, a estrategia SEGURA BTC.
+     para superar BTC. Se nenhuma alt bata BTC, a estrategia SEGURA BTC.
      Nunca fica totalmente em caixa durante um bull market.
 
   2. PROTECAO INTELIGENTE — dois filtros combinados:
@@ -26,8 +26,8 @@ NOVA FILOSOFIA:
 
 LOGICA POR ANO (esperada):
   2022: BTC abaixo SMA200 → caixa → +0%      (vs BTC -65%)   [+65pp]
-  2023: Q4 SOL explode → heavy SOL rotation  → esperado +180% (vs BTC +154%) [+26pp]
-  2024: XRP/BNB batem BTC em Q4             → esperado +130%+ (vs BTC +120%) [+10pp]
+  2023: Q4 SOL explode → heavy SOL rotation  → esperado +235% (vs BTC +154%) [+81pp]
+  2024: XRP/BNB batem BTC em Q4             → esperado +133%+ (vs BTC +112%) [+21pp]
   2025: ATH-25% filtro expulsa em Jan/Fev   → protecao melhor que SMA200 sozinho
 
 PARAMETROS PRINCIPAIS:
