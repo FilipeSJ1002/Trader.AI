@@ -25,6 +25,7 @@ ATIVOS = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT", "BNBUSDT", "AVAXUSDT"]
 # Estado do rebalanceamento (evita rebalancear toda hora)
 _last_rebalance_day = None
 _last_eligible      = {}
+_last_heartbeat_min = None  # evita heartbeat duplicado por minuto
 
 
 async def _maybe_rebalance(candle_time):
@@ -32,8 +33,9 @@ async def _maybe_rebalance(candle_time):
     Recalcula os pesos-alvo do trend-following e rebalanceia quando:
       • muda o dia (a SMA200 diaria so muda 1x/dia), OU
       • muda o conjunto de ativos elegiveis (cruzamento de SMA200 intradia).
+    Exibe heartbeat a cada minuto com o estado atual do mercado.
     """
-    global _last_rebalance_day, _last_eligible
+    global _last_rebalance_day, _last_eligible, _last_heartbeat_min
 
     daily = market_state.get_daily_closes()
     if len(daily) < 2:
@@ -43,15 +45,30 @@ async def _maybe_rebalance(candle_time):
     eligible = {k: (v > 0) for k, v in targets.items()}
     day      = pd.to_datetime(candle_time).normalize()
 
-    if _last_rebalance_day == day and eligible == _last_eligible:
-        return  # ja rebalanceou hoje e nada mudou
-
-    # Precos atuais de cada ativo
+    # Precos atuais
     prices = {}
     for s in ATIVOS:
         df = market_state.history_data.get(s)
         if df is not None and len(df) > 0:
             prices[s] = float(df['close'].iloc[-1])
+
+    # Heartbeat uma vez por minuto (independente de quantos ativos fecham candle)
+    current_min = pd.to_datetime(candle_time).strftime('%Y-%m-%d %H:%M')
+    if current_min != _last_heartbeat_min:
+        _last_heartbeat_min = current_min
+        btc_price = prices.get("BTCUSDT", 0)
+        alvo_str  = " | ".join(
+            f"{k.replace('USDT','')}: {v*100:.0f}%"
+            for k, v in targets.items() if v > 0
+        ) or "CAIXA"
+        estado = "BULL" if any(v > 0 for v in targets.values()) else "BEAR"
+        logger.info(
+            f"[BOT] {pd.to_datetime(candle_time).strftime('%H:%M')} | "
+            f"BTC ${btc_price:,.0f} | {estado} | {alvo_str}"
+        )
+
+    if _last_rebalance_day == day and eligible == _last_eligible:
+        return  # ja rebalanceou hoje e nada mudou
 
     if prices:
         try:
@@ -78,14 +95,23 @@ async def start_stream():
         try:
             print("[STREAM] Iniciando conexao WebSocket Multiplex com a Binance...")
             client = await AsyncClient.create()
-            bm     = BinanceSocketManager(client)
+            bm     = BinanceSocketManager(client, user_timeout=60)
             stream = bm.multiplex_socket(streams)
 
             async with stream as ts:
                 print(f"[STREAM] Conexao estabelecida! Monitorando {len(ATIVOS)} ativos...")
 
                 while True:
-                    res = await ts.recv()
+                    try:
+                        res = await asyncio.wait_for(ts.recv(), timeout=60)
+                    except asyncio.TimeoutError:
+                        continue
+                    except Exception as queue_e:
+                        if "QueueOverflow" in str(queue_e) or "queue" in str(queue_e).lower():
+                            logger.warning("[STREAM] Queue cheia — descartando mensagens antigas.")
+                            await asyncio.sleep(0.1)
+                            continue
+                        raise
 
                     if res is None or 'data' not in res:
                         continue

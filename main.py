@@ -1,5 +1,6 @@
 import os
 import asyncio
+import requests
 import pandas as pd
 from datetime import datetime
 from dotenv import load_dotenv
@@ -7,14 +8,14 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 import market_state
 import database
-from binance_stream import ATIVOS  # fonte única da lista de ativos
+from binance_stream import ATIVOS
 
 load_dotenv()
 
 app = FastAPI(
-    title="Trader.AI API — V6",
-    description="Motor de trend-following multi-asset (SMA200 + risk-on) com loop de aprendizado.",
-    version="6.0.0"
+    title="Trader.AI API — V8",
+    description="Motor de trend-following BTC+ Alpha (SMA200 + ATH-25% + Momentum Relativo).",
+    version="8.0.0"
 )
 
 
@@ -24,146 +25,123 @@ class PriceInput(BaseModel):
     volume: int
 
 
+def _carregar_diario(symbol: str) -> pd.Series:
+    """
+    Carrega closes diarios reais da Binance publica (250 dias).
+    Fallback: parquet local se a API falhar.
+    """
+    try:
+        resp = requests.get(
+            "https://api.binance.com/api/v3/klines",
+            params={"symbol": symbol, "interval": "1d", "limit": 250},
+            timeout=10
+        )
+        resp.raise_for_status()
+        cols = ['t', 'o', 'h', 'l', 'c', 'v',
+                'close_time', 'qav', 'num_trades',
+                'taker_base_vol', 'taker_quote_vol', 'ignore']
+        df = pd.DataFrame(resp.json(), columns=cols)
+        df['date'] = pd.to_datetime(df['t'], unit='ms')
+        df.set_index('date', inplace=True)
+        series = df['c'].astype(float)
+        print(f"  Diario {symbol}: {len(series)} dias (Binance real)")
+        return series
+    except Exception as e:
+        print(f"  API real falhou para {symbol} ({e}), usando parquet...")
+        path = os.path.join("data", f"{symbol}_1m.parquet")
+        df_pq = pd.read_parquet(path)
+        if 'date' in df_pq.columns:
+            df_pq.set_index('date', inplace=True)
+        series = df_pq['close'].resample('1D').last().dropna()
+        print(f"  Diario {symbol}: {len(series)} dias (parquet local)")
+        return series
+
+
+def _carregar_todos_historicos():
+    """
+    Carrega todos os historicos de forma sincrona.
+    Executado em thread separada para nao bloquear o event loop.
+    """
+    from binance.client import Client
+
+    api_key = os.getenv("BINANCE_API_KEY")
+    secret  = os.getenv("BINANCE_SECRET_KEY")
+
+    if not api_key or not secret:
+        print("[STARTUP] Chaves API ausentes — sem historico inicial.")
+        return
+
+    client     = Client(api_key, secret, testnet=True)
+    cols_kline = ['t', 'o', 'h', 'l', 'c', 'v',
+                  'close_time', 'qav', 'num_trades',
+                  'taker_base_vol', 'taker_quote_vol', 'ignore']
+
+    for symbol in ATIVOS:
+        print(f"\n[STARTUP] Carregando {symbol}...")
+
+        # 1M — 15 dias
+        klines = client.get_historical_klines(
+            symbol, Client.KLINE_INTERVAL_1MINUTE, "15 days ago UTC")
+        df_1m = pd.DataFrame(klines, columns=cols_kline)
+        df_1m['date'] = pd.to_datetime(df_1m['t'], unit='ms')
+        df_1m.set_index('date', inplace=True)
+        df_1m = df_1m[['o', 'h', 'l', 'c', 'v']].astype(float)
+        df_1m.columns = ['open', 'high', 'low', 'close', 'volume']
+        market_state.set_historical_data(symbol, df_1m)
+        print(f"  1M: {len(df_1m)} candles")
+
+        # 1H — 30 dias
+        klines_h = client.get_historical_klines(
+            symbol, Client.KLINE_INTERVAL_1HOUR, "30 days ago UTC")
+        df_1h = pd.DataFrame(klines_h, columns=cols_kline)
+        df_1h['date'] = pd.to_datetime(df_1h['t'], unit='ms')
+        df_1h.set_index('date', inplace=True)
+        df_1h = df_1h[['o', 'h', 'l', 'c', 'v']].astype(float)
+        df_1h.columns = ['open', 'high', 'low', 'close', 'volume']
+        market_state.set_historical_1h_data(symbol, df_1h)
+        print(f"  1H: {len(df_1h)} candles")
+
+        # Diario — 250 dias da Binance real (necessario para SMA200)
+        daily = _carregar_diario(symbol)
+        market_state.set_historical_daily(symbol, daily)
+
+    print("\n[STARTUP] Historicos carregados com sucesso.")
+
+
 @app.on_event("startup")
 async def startup_event():
-    """Inicializa os dados históricos reais ao iniciar a API (Multi-Asset)."""
-    try:
-        from binance.client import Client
-        api_key = os.getenv("BINANCE_API_KEY")
-        secret  = os.getenv("BINANCE_SECRET_KEY")
-
-        if not api_key or not secret:
-            print("Chaves API Binance ausentes. Não foi possível baixar histórico inicial.")
-            return
-
-        client = Client(api_key, secret, testnet=True)
-
-        for symbol in ATIVOS:
-            print(f"Carregando histórico 1M para {symbol} da Binance...")
-            # 15 dias para que as features MTF (EMA200 de 1H ≈230h) sejam validas desde o boot
-            klines_1m = client.get_historical_klines(symbol, Client.KLINE_INTERVAL_1MINUTE, "15 days ago UTC")
-            df_1m = pd.DataFrame(klines_1m, columns=[
-                't', 'o', 'h', 'l', 'c', 'v',
-                'close_time', 'qav', 'num_trades',
-                'taker_base_vol', 'taker_quote_vol', 'ignore'
-            ])
-            df_1m['date'] = pd.to_datetime(df_1m['t'], unit='ms')
-            df_1m.set_index('date', inplace=True)
-            for col in ['o', 'h', 'l', 'c', 'v']:
-                df_1m[col] = df_1m[col].astype(float)
-            df_1m = df_1m[['o', 'h', 'l', 'c', 'v']]
-            df_1m.rename(columns={'o': 'open', 'h': 'high', 'l': 'low', 'c': 'close', 'v': 'volume'}, inplace=True)
-            market_state.set_historical_data(symbol, df_1m)
-            print(f"Histórico 1M carregado para {symbol}: {len(df_1m)} candles.")
-
-            print(f"Carregando histórico 1H para {symbol} da Binance...")
-            klines_1h = client.get_historical_klines(symbol, Client.KLINE_INTERVAL_1HOUR, "30 days ago UTC")
-            df_1h = pd.DataFrame(klines_1h, columns=[
-                't', 'o', 'h', 'l', 'c', 'v',
-                'close_time', 'qav', 'num_trades',
-                'taker_base_vol', 'taker_quote_vol', 'ignore'
-            ])
-            df_1h['date'] = pd.to_datetime(df_1h['t'], unit='ms')
-            df_1h.set_index('date', inplace=True)
-            for col in ['o', 'h', 'l', 'c', 'v']:
-                df_1h[col] = df_1h[col].astype(float)
-            df_1h = df_1h[['o', 'h', 'l', 'c', 'v']]
-            df_1h.rename(columns={'o': 'open', 'h': 'high', 'l': 'low', 'c': 'close', 'v': 'volume'}, inplace=True)
-            market_state.set_historical_1h_data(symbol, df_1h)
-            print(f"Histórico 1H carregado para {symbol}: {len(df_1h)} candles.")
-
-            # ── Histórico DIÁRIO (V6 — trend-following SMA200) ────────────────
-            print(f"Carregando histórico diário para {symbol} (250 dias)...")
-            klines_1d = client.get_historical_klines(symbol, Client.KLINE_INTERVAL_1DAY, "250 days ago UTC")
-            df_1d = pd.DataFrame(klines_1d, columns=[
-                't', 'o', 'h', 'l', 'c', 'v',
-                'close_time', 'qav', 'num_trades',
-                'taker_base_vol', 'taker_quote_vol', 'ignore'
-            ])
-            df_1d['date'] = pd.to_datetime(df_1d['t'], unit='ms')
-            df_1d.set_index('date', inplace=True)
-            daily_close = df_1d['c'].astype(float)
-            market_state.set_historical_daily(symbol, daily_close)
-            print(f"Histórico diário carregado para {symbol}: {len(daily_close)} dias.")
-
-        import asyncio
-        from binance_stream import start_stream
-        asyncio.create_task(start_stream())
-
-    except Exception as e:
-        print(f"Erro fatal ao carregar dados: {e}")
-        pass
+    """Inicia carregamento de dados em background e sobe o WebSocket."""
+    from binance_stream import start_stream
+    # Roda as chamadas bloqueantes em thread separada — nao trava o event loop
+    await asyncio.to_thread(_carregar_todos_historicos)
+    asyncio.create_task(start_stream())
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Endpoints
 # ─────────────────────────────────────────────────────────────────────────────
-@app.post("/analisar_mercado")
-async def analisar_mercado(input_data: PriceInput):
-    """
-    Recebe um novo preço, cria um candle temporário,
-    adiciona ao histórico real e executa a análise técnica + ML.
-    """
-    symbol = input_data.symbol.upper()
-
-    if symbol not in market_state.history_data or market_state.history_data[symbol].empty:
-        raise HTTPException(status_code=503, detail=f"Dados históricos não carregados para {symbol}.")
-
-    new_candle = {
-        "date":   datetime.now(),
-        "open":   input_data.price,
-        "high":   input_data.price,
-        "low":    input_data.price,
-        "close":  input_data.price,
-        "volume": input_data.volume
-    }
-
-    try:
-        resultado = market_state.append_new_candle(symbol, new_candle)
-        return resultado
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Erro na análise: {str(e)}")
-
 
 @app.get("/status")
 def status():
-    """Retorna o status do bot e os símbolos monitorados."""
     return {
         "status":          "ok",
-        "version":         "4.0.0",
+        "version":         "8.0.0",
         "symbols_tracked": list(market_state.history_data.keys())
     }
 
 
-@app.get("/performance")
-def performance():
-    """
-    Retorna o resumo de performance do bot:
-    win rate, P&L total, P&L médio por trade, melhor/pior trade,
-    P&L acumulado dos últimos 7 dias e drawdown diário (Fase 4.2).
-    """
-    summary = database.get_performance_summary()
-    summary["daily_drawdown"] = database.get_drawdown_summary()
-    return summary
-
-
-@app.get("/trades")
-def recent_trades(limit: int = 20):
-    """
-    Retorna os N trades mais recentes do log.
-    Parâmetro: ?limit=20 (padrão)
-    """
-    if limit > 200:
-        limit = 200
-    trades = database.get_recent_trades(limit)
-    return {"trades": trades, "count": len(trades)}
+@app.get("/trend")
+def trend():
+    """Estado atual da estrategia V8: pesos-alvo, SMA200, momentum relativo."""
+    from trend_strategy import describe_signal
+    daily = market_state.get_daily_closes()
+    if not daily:
+        return {"status": "aguardando dados diarios", "assets": {}}
+    return describe_signal(daily)
 
 
 @app.get("/positions")
 def positions():
-    """Retorna o estado atual de todas as posições abertas."""
     result = {}
     for symbol in ATIVOS:
         pos = database.get_position(symbol)
@@ -172,14 +150,28 @@ def positions():
     return {"open_positions": result, "count": len(result)}
 
 
+@app.get("/performance")
+def performance():
+    summary = database.get_performance_summary()
+    summary["daily_drawdown"] = database.get_drawdown_summary()
+    return summary
+
+
+@app.get("/trades")
+def recent_trades(limit: int = 20):
+    if limit > 200:
+        limit = 200
+    trades = database.get_recent_trades(limit)
+    return {"trades": trades, "count": len(trades)}
+
+
 @app.get("/regime")
 def regime():
-    """Retorna o regime de mercado atual de todos os ativos monitorados."""
     return {
         "regimes": {
             symbol: {
-                "regime":      market_state.market_regime.get(symbol, "UNKNOWN"),
-                "signal_5m":   market_state._get_5m_signal(symbol),
+                "regime":       market_state.market_regime.get(symbol, "UNKNOWN"),
+                "signal_5m":    market_state._get_5m_signal(symbol),
                 "daily_return": round(market_state.daily_returns.get(symbol, 0) * 100, 3)
             }
             for symbol in ATIVOS
@@ -188,28 +180,12 @@ def regime():
     }
 
 
-@app.get("/trend")
-def trend():
-    """
-    Estado atual da estratégia trend-following (V6):
-    quais ativos estão em tendência de alta (acima da SMA200), se está risk-on,
-    e o peso-alvo de cada ativo na carteira.
-    """
-    from trend_strategy import describe_signal
-    daily = market_state.get_daily_closes()
-    if not daily:
-        return {"status": "aguardando dados diarios", "assets": {}}
-    return describe_signal(daily)
-
-
 @app.get("/learning")
 def learning():
-    """Resumo do que o bot já aprendeu com os próprios trades (loop de aprendizado)."""
     from learn_from_trades import stats
     return stats()
 
 
-# ── Estado do retreino (evita múltiplos jobs simultâneos) ──────────────────
 _retrain_running = False
 
 
@@ -217,16 +193,9 @@ _retrain_running = False
 async def retrain(background_tasks: BackgroundTasks,
                   pair: str | None = None,
                   skip_download: bool = False):
-    """
-    Dispara o retreino completo dos modelos em background.
-    Parâmetros (query string):
-      ?pair=BTCUSDT     — retreina só um par (opcional)
-      ?skip_download=true — pula download (usa dados locais)
-    """
     global _retrain_running
     if _retrain_running:
-        raise HTTPException(status_code=409, detail="Retreino ja em andamento. Aguarde a conclusao.")
-
+        raise HTTPException(status_code=409, detail="Retreino ja em andamento.")
     pairs = [pair.upper()] if pair else None
 
     def _run():
@@ -234,23 +203,20 @@ async def retrain(background_tasks: BackgroundTasks,
         _retrain_running = True
         try:
             from retrain_scheduler import run_retrain
-            run_retrain(pairs=pairs, skip_download=skip_download)
+            run_retrain(pairs=pairs or [], skip_download=skip_download)
         finally:
             _retrain_running = False
 
     background_tasks.add_task(_run)
-    return {
-        "status":  "started",
-        "message": "Retreino iniciado em background. Consulte /retrain/status para acompanhar.",
-        "pairs":   pairs or "todos",
-    }
+    return {"status": "started", "pairs": pairs or "todos"}
 
 
 @app.get("/retrain/status")
 def retrain_status():
-    """Retorna se há retreino em andamento e o histórico dos últimos retreinos."""
     from retrain_scheduler import get_retrain_log
-    return {
-        "running":       _retrain_running,
-        "recent_runs":   get_retrain_log(limit=5),
-    }
+    return {"running": _retrain_running, "recent_runs": get_retrain_log(limit=5)}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

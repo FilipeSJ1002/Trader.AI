@@ -24,7 +24,8 @@ except Exception as e:
     logger.error(f"Erro ao conectar na Binance Testnet: {e}")
     client = None
 
-from binance_stream import ATIVOS  # fonte única da lista de ativos
+from trend_strategy import PRIORITY
+ATIVOS = list(PRIORITY.keys())  # ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','AVAXUSDT']
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Precisão de quantidade por ativo (casas decimais para floor)
