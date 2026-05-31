@@ -11,7 +11,7 @@ Novidades V4:
 import logging
 import pandas as pd
 import pandas_ta as ta
-from strategy import TechnicalAnalysis
+# TechnicalAnalysis removida — V8 usa trend_strategy.compute_target_weights
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ htf_weakness:   dict[str, bool]  = {}          # fraqueza no HTF (1H)
 market_regime:  dict[str, str]   = {}          # BULL_TREND | SIDEWAYS | BEAR_TREND
 daily_returns:  dict[str, float] = {}          # retorno das últimas 24h
 
-strategy = TechnicalAnalysis()
+# (strategy ML removida — V8 nao usa scalping)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Constantes de Regime
@@ -318,9 +318,9 @@ def append_new_candle(symbol: str, candle: dict) -> dict:
     # ── Sinal de confirmação no 5M ────────────────────────────────────
     signal_5m = _get_5m_signal(symbol)
 
-    # ── Análise técnica principal (1M) ────────────────────────────────
-    resultado = strategy.analisar_compra_venda(history_data[symbol].copy())
-    decision  = resultado.get("decision", "NEUTRO")
+    # V8: analise ML removida — decisao e feita pelo trend_strategy
+    resultado = {"decision": "NEUTRO", "analysis": {}}
+    decision  = "NEUTRO"
 
     # ── Filtro de Regime ──────────────────────────────────────────────
     if decision.startswith("COMPRA_"):
