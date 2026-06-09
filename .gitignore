@@ -12,8 +12,21 @@ venv/
 *.zip
 data/
 datasets_brutos/
+data_v5/
+
+# Modelos treinados (binários pesados — não versionar)
+*.pth
+*.pt
+*.ckpt
 
 # Estado de runtime e logs (não versionar)
 trading_state.db
 train_v5_log.txt
 *.log
+
+# Arquivos temporários de sessão e backtest
+_LEIA_PRIMEIRO.md
+backtest_v5*.txt
+requirements_utf8.txt
+RELATORIO_PROJETO.txt
+pip_temp/

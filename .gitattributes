@@ -1,0 +1,10 @@
+# GitHub Linguist — força detecção correta da linguagem principal
+# O arquivo backtest_report.html gerado automaticamente estava fazendo
+# o GitHub exibir o projeto como 98% HTML em vez de Python.
+
+*.html    linguist-detectable=false
+*.htm     linguist-detectable=false
+*.ipynb   linguist-detectable=false
+*.json    linguist-detectable=false
+*.css     linguist-detectable=false
+*.js      linguist-detectable=false
