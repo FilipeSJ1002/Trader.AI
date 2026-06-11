@@ -37,8 +37,8 @@ ALTS = ["ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "AVAXUSDT"]
 BASE = "BTCUSDT"
 FORWARD_MINUTES = HORIZON_H
 
-TRAIN_END = "2023-12-31"
-VAL_END   = "2024-12-31"
+TRAIN_END = "2025-06-30"   # era 2023-12-31 — adiciona 18 meses (bull 2024 + H1 2025)
+VAL_END   = "2025-12-31"   # era 2024-12-31 — H2 2025 para validacao
 
 CLASS_NAMES = {0: "QUEDA", 1: "NEUTRO", 2: "ALTA"}
 
@@ -126,6 +126,111 @@ def _compute_target(close: pd.Series) -> pd.Series:
     return y
 
 
+def _compute_target_asym(close: pd.Series, up_thresh: float,
+                         down_thresh: float) -> pd.Series:
+    """Target com thresholds assimetricos (ALTA e QUEDA independentes)."""
+    fwd_ret = close.shift(-HORIZON_H) / close - 1
+    y = pd.Series(1, index=close.index, dtype="int8")
+    y[fwd_ret >  up_thresh]   = 2  # ALTA
+    y[fwd_ret < -down_thresh] = 0  # QUEDA
+    y[fwd_ret.isna()] = -1
+    return y
+
+
+# ── Experimentos V5.9 (dual) ─────────────────────────────────────────────────
+# A "mais sinais"          : ALTA/QUEDA simetricos em 0.4% (~25/50/25)
+# B "especialista em queda": ALTA rigida 0.8%, QUEDA sensivel 0.4%
+OUTPUT_A   = "data_v5a"
+THRESH_A_UP, THRESH_A_DOWN = 0.004, 0.004
+OUTPUT_B   = "data_v5b"
+THRESH_B_UP, THRESH_B_DOWN = 0.008, 0.004
+
+
+def prepare_dual():
+    """
+    Gera os DOIS datasets numa unica passada:
+      data_v5a/{split}_{sym}.npz : X + y do experimento A
+      data_v5b/{split}_{sym}.npz : apenas y do experimento B (X identico ao A)
+    Features sao computadas uma vez por ativo (nao por split) — 3x mais rapido.
+    """
+    os.makedirs(OUTPUT_A, exist_ok=True)
+    os.makedirs(OUTPUT_B, exist_ok=True)
+    print(f"\n{'='*62}")
+    print(f"Preparando V5.9 DUAL — A: +-{THRESH_A_UP*100:.1f}% | "
+          f"B: ALTA {THRESH_B_UP*100:.1f}% / QUEDA {THRESH_B_DOWN*100:.1f}%")
+    print(f"Janela: {WINDOW_SIZE}m | Horizonte: {HORIZON_H}m | Subsample: 1/{SUBSAMPLE}")
+    print(f"{'='*62}")
+
+    btc_df = _load_parquet(BTC)
+    print(f"[BTC] {len(btc_df)} candles | {btc_df.index[0].date()} a {btc_df.index[-1].date()}")
+
+    splits = ["train", "val", "test"]
+
+    for sym in ASSETS:
+        out_files = ([os.path.join(OUTPUT_A, f"{s}_{sym}.npz") for s in splits] +
+                     [os.path.join(OUTPUT_B, f"{s}_{sym}.npz") for s in splits])
+        if all(os.path.exists(p) for p in out_files):
+            print(f"  [{sym}] ja existe (A+B, 3 splits) — pulando.")
+            continue
+
+        print(f"  [{sym}] calculando features...", flush=True)
+        adf = _load_parquet(sym)
+        common = adf.index.intersection(btc_df.index)
+        adf, btc_al = adf.loc[common], btc_df.loc[common]
+
+        feat_df = _add_features(adf, btc_al)
+        feat_df["ta"] = _compute_target_asym(adf["close"], THRESH_A_UP, THRESH_A_DOWN)
+        feat_df["tb"] = _compute_target_asym(adf["close"], THRESH_B_UP, THRESH_B_DOWN)
+        feat_df = feat_df[(feat_df["ta"] >= 0) & (feat_df["tb"] >= 0)]
+        feat_df.dropna(inplace=True)
+
+        for split in splits:
+            if split == "train":
+                mask = feat_df.index <= TRAIN_END
+            elif split == "val":
+                mask = (feat_df.index > TRAIN_END) & (feat_df.index <= VAL_END)
+            else:
+                mask = feat_df.index > VAL_END
+            sub = feat_df[mask]
+
+            if len(sub) < WINDOW_SIZE + 10:
+                print(f"  [{sym}] {split}: dados insuficientes.")
+                continue
+
+            cols = [c for c in sub.columns if c not in ("ta", "tb")]
+            feats = sub[cols].values
+            t_a   = sub["ta"].values
+            t_b   = sub["tb"].values
+
+            X_list, ya_list, yb_list = [], [], []
+            for i in range(WINDOW_SIZE, len(feats), SUBSAMPLE):
+                X_list.append(feats[i - WINDOW_SIZE:i])
+                ya_list.append(t_a[i])
+                yb_list.append(t_b[i])
+
+            X   = np.array(X_list, dtype=np.float32)
+            y_a = np.array(ya_list, dtype=np.int8)
+            y_b = np.array(yb_list, dtype=np.int8)
+
+            dist_a = {CLASS_NAMES[k]: int((y_a == k).sum()) for k in [0, 1, 2]}
+            dist_b = {CLASS_NAMES[k]: int((y_b == k).sum()) for k in [0, 1, 2]}
+            print(f"  [{sym}] {split}: {len(X)} amostras | "
+                  f"A={dist_a} | B={dist_b}", flush=True)
+
+            np.savez_compressed(os.path.join(OUTPUT_A, f"{split}_{sym}.npz"),
+                                X=X, y=y_a)
+            np.savez_compressed(os.path.join(OUTPUT_B, f"{split}_{sym}.npz"),
+                                y=y_b)
+            del X, y_a, y_b, X_list, ya_list, yb_list, feats
+            gc.collect()
+
+        del feat_df, adf
+        gc.collect()
+
+    print(f"\n[DUAL] Concluido: {OUTPUT_A}/ (X+y_A) e {OUTPUT_B}/ (y_B)")
+    print(f"{'='*62}\n")
+
+
 def prepare_all(split: str = "train"):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     print(f"\n{'='*62}")
@@ -194,8 +299,19 @@ def prepare_all(split: str = "train"):
 
 
 if __name__ == "__main__":
-    print("=== Trader.AI V5.1 — Preparacao de Features (direcional) ===\n")
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dual", action="store_true",
+                    help="Gera datasets dos experimentos A (0.4%% simetrico) "
+                         "e B (ALTA 0.8%% / QUEDA 0.4%%) numa unica passada")
+    args = ap.parse_args()
+
     t0 = datetime.now()
-    for split in ["train", "val", "test"]:
-        prepare_all(split)
+    if args.dual:
+        print("=== Trader.AI V5.9 — Preparacao DUAL (experimentos A + B) ===\n")
+        prepare_dual()
+    else:
+        print("=== Trader.AI V5.1 — Preparacao de Features (direcional) ===\n")
+        for split in ["train", "val", "test"]:
+            prepare_all(split)
     print(f"Concluido em {(datetime.now()-t0).seconds}s.")

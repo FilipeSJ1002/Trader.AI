@@ -35,7 +35,9 @@ CYCLES_PER_EPOCH = 3          # ciclos por epoch (mistura gradientes entre ativo
 MAX_PER_CYCLE    = 30000      # amostras por ativo por ciclo (3×6×30k = 540k/epoch)
 MODEL_PATH  = "v5_model.pth"
 DATA_DIR    = "data_v5"
+Y_DIR       = None            # se definido, carrega y deste diretorio (X compartilhado)
 LOG_PATH    = "v5_training.log"
+RUN_LABEL   = "V5.8"
 
 
 class FocalLoss(nn.Module):
@@ -77,19 +79,31 @@ def log(msg: str = ""):
 
 
 def load_alt(split: str, sym: str):
-    """Carrega sem copiar (from_numpy compartilha memoria com o array)."""
+    """Carrega sem copiar (from_numpy compartilha memoria com o array).
+    Se Y_DIR estiver definido, X vem de DATA_DIR e y de Y_DIR
+    (datasets compartilham as mesmas janelas, mudam apenas os rotulos)."""
     path = os.path.join(DATA_DIR, f"{split}_{sym}.npz")
     if not os.path.exists(path):
         return None, None
     with np.load(path) as data:
-        X = torch.from_numpy(np.ascontiguousarray(data["X"], dtype=np.float32))
-        y = torch.from_numpy(data["y"].astype(np.int64))
+        X    = torch.from_numpy(np.ascontiguousarray(data["X"], dtype=np.float32))
+        y_np = data["y"]
+    if Y_DIR:
+        ypath = os.path.join(Y_DIR, f"{split}_{sym}.npz")
+        if not os.path.exists(ypath):
+            return None, None
+        with np.load(ypath) as yd:
+            y_np = yd["y"]
+        assert len(y_np) == len(X), \
+            f"{sym}/{split}: X({len(X)}) != y({len(y_np)}) — datasets desalinhados"
+    y = torch.from_numpy(y_np.astype(np.int64))
     return X, y
 
 
 def load_y(split: str, sym: str):
     """Carrega APENAS os rotulos (sem o X de ~2GB) — para contar classes."""
-    path = os.path.join(DATA_DIR, f"{split}_{sym}.npz")
+    src = Y_DIR if Y_DIR else DATA_DIR
+    path = os.path.join(src, f"{split}_{sym}.npz")
     if not os.path.exists(path):
         return None
     return np.load(path)["y"]
@@ -185,9 +199,10 @@ def train():
     if device == "cuda":
         torch.set_float32_matmul_precision("high")
 
-    log("\n=== Trader.AI V5.7 — dropout=0.4 | wd=2e-4 | LR=1e-4 | GPU | hidden=256 ===")
+    log(f"\n=== Trader.AI {RUN_LABEL} — LR={LR} | train ate 2025-06 | val H2-2025 | test 2026 ===")
     log(f"Inicio: {datetime.now():%Y-%m-%d %H:%M:%S}")
     log(f"Device: {device} | Batch: {BATCH_SIZE} | Epochs ate {EPOCHS} | LR={LR} | FocalLoss(gamma={FOCAL_GAMMA})")
+    log(f"Dados: X={DATA_DIR} | y={Y_DIR if Y_DIR else DATA_DIR} | Modelo out: {MODEL_PATH}")
     log(f"Ciclos/epoch: {CYCLES_PER_EPOCH} x {MAX_PER_CYCLE} amostras/ativo")
 
     # n_features (lê só o shape, sem manter em memória)
@@ -306,6 +321,29 @@ def load_model_safe(n_features, device):
 
 if __name__ == "__main__":
     import traceback
+    import argparse
+
+    ap = argparse.ArgumentParser(description="Trader.AI V5 — treino do classificador direcional")
+    ap.add_argument("--data",      default=DATA_DIR,
+                    help="Diretorio com os npz de X+y (padrao data_v5)")
+    ap.add_argument("--y-dir",     default=None, dest="y_dir",
+                    help="Diretorio alternativo apenas para os rotulos y "
+                         "(X continua vindo de --data)")
+    ap.add_argument("--model-out", default=MODEL_PATH, dest="model_out",
+                    help="Arquivo de saida do modelo (padrao v5_model.pth)")
+    ap.add_argument("--log",       default=LOG_PATH,
+                    help="Arquivo de log (padrao v5_training.log)")
+    ap.add_argument("--label",     default=RUN_LABEL,
+                    help="Rotulo da run para o log (ex: V5.9-A)")
+    args = ap.parse_args()
+
+    # Rebind dos globais usados pelas funcoes de treino
+    DATA_DIR   = args.data
+    Y_DIR      = args.y_dir
+    MODEL_PATH = args.model_out
+    LOG_PATH   = args.log
+    RUN_LABEL  = args.label
+
     t0 = datetime.now()
     try:
         train()

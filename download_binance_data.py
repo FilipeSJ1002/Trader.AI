@@ -33,13 +33,14 @@ PAIRS_CONFIG = {
 }
 
 # Data de início disponível no Binance Vision por par
+# V5: estendido para cobrir mais ciclos de mercado (bull 2019-2021 + bear 2022)
 PAIR_START = {
-    "BTCUSDT":  (2022, 1),
-    "ETHUSDT":  (2022, 1),
-    "XRPUSDT":  (2022, 1),
-    "SOLUSDT":  (2021, 1),   # SOL listado em Set/2020
-    "BNBUSDT":  (2021, 1),
-    "AVAXUSDT": (2021, 1),   # AVAX listado em Set/2020
+    "BTCUSDT":  (2019, 1),   # BTC desde 2019 — inclui bull 2020-2021 + bear 2022
+    "ETHUSDT":  (2019, 1),   # ETH desde 2019
+    "XRPUSDT":  (2019, 1),   # XRP desde 2019
+    "SOLUSDT":  (2020, 9),   # SOL listado em Set/2020
+    "BNBUSDT":  (2019, 1),   # BNB desde 2019
+    "AVAXUSDT": (2020, 9),   # AVAX listado em Set/2020
 }
 
 
