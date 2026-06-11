@@ -34,3 +34,8 @@ pip_temp/
 # Saidas geradas pelo pipeline de experimentos (v5_run_experiments.py)
 v5_bt_*.txt
 v5_experiments*
+
+# Relatorios HTML gerados pelos backtests (pesados — distorcem as estatisticas
+# de linguagem do GitHub)
+backtest_report.html
+*.html
