@@ -12,7 +12,7 @@ venv/
 *.zip
 data/
 datasets_brutos/
-data_v5*/
+data_v*/
 
 # Modelos treinados (binários pesados — não versionar)
 *.pth
@@ -34,6 +34,13 @@ pip_temp/
 # Saidas geradas pelo pipeline de experimentos (v5_run_experiments.py)
 v5_bt_*.txt
 v5_experiments*
+
+# Saidas do walk-forward e do live paper trading (geradas em runtime)
+v5_walkforward_done.txt
+v5_live_state.json
+v5_live_trades.csv
+v5_train.pause
+*.meta.json
 
 # Relatorios HTML gerados pelos backtests (pesados — distorcem as estatisticas
 # de linguagem do GitHub)

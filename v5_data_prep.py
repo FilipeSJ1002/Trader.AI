@@ -231,6 +231,77 @@ def prepare_dual():
     print(f"{'='*62}\n")
 
 
+def prepare_fold(out_dir: str, train_end: str, val_end: str,
+                 up_thresh: float = THRESH_B_UP,
+                 down_thresh: float = THRESH_B_DOWN):
+    """
+    Gera um fold de walk-forward com cortes de data customizados.
+    Usa a receita de labels do experimento B (vencedor): ALTA rigida,
+    QUEDA sensivel. Uma passada por ativo, 3 splits por passada.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    print(f"\n{'='*62}")
+    print(f"Preparando FOLD — train<={train_end} | val<={val_end} | test>{val_end}")
+    print(f"Labels: ALTA {up_thresh*100:.1f}% / QUEDA {down_thresh*100:.1f}% -> {out_dir}/")
+    print(f"{'='*62}")
+
+    btc_df = _load_parquet(BTC)
+    splits = ["train", "val", "test"]
+
+    for sym in ASSETS:
+        out_files = [os.path.join(out_dir, f"{s}_{sym}.npz") for s in splits]
+        if all(os.path.exists(p) for p in out_files):
+            print(f"  [{sym}] ja existe (3 splits) — pulando.")
+            continue
+
+        print(f"  [{sym}] calculando features...", flush=True)
+        adf = _load_parquet(sym)
+        common = adf.index.intersection(btc_df.index)
+        adf, btc_al = adf.loc[common], btc_df.loc[common]
+
+        feat_df = _add_features(adf, btc_al)
+        feat_df["target"] = _compute_target_asym(adf["close"], up_thresh, down_thresh)
+        feat_df = feat_df[feat_df["target"] >= 0]
+        feat_df.dropna(inplace=True)
+
+        for split in splits:
+            if split == "train":
+                mask = feat_df.index <= train_end
+            elif split == "val":
+                mask = (feat_df.index > train_end) & (feat_df.index <= val_end)
+            else:
+                mask = feat_df.index > val_end
+            sub = feat_df[mask]
+
+            if len(sub) < WINDOW_SIZE + 10:
+                print(f"  [{sym}] {split}: dados insuficientes.")
+                continue
+
+            cols  = [c for c in sub.columns if c != "target"]
+            feats = sub[cols].values
+            targs = sub["target"].values
+
+            X_list, y_list = [], []
+            for i in range(WINDOW_SIZE, len(feats), SUBSAMPLE):
+                X_list.append(feats[i - WINDOW_SIZE:i])
+                y_list.append(targs[i])
+
+            X = np.array(X_list, dtype=np.float32)
+            y = np.array(y_list, dtype=np.int8)
+            dist = {CLASS_NAMES[k]: int((y == k).sum()) for k in [0, 1, 2]}
+            print(f"  [{sym}] {split}: {len(X)} amostras | {dist}", flush=True)
+
+            np.savez_compressed(os.path.join(out_dir, f"{split}_{sym}.npz"), X=X, y=y)
+            del X, y, X_list, y_list, feats, targs
+            gc.collect()
+
+        del feat_df, adf
+        gc.collect()
+
+    print(f"\n[FOLD] Concluido em {out_dir}/")
+    print(f"{'='*62}\n")
+
+
 def prepare_all(split: str = "train"):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     print(f"\n{'='*62}")
@@ -304,10 +375,21 @@ if __name__ == "__main__":
     ap.add_argument("--dual", action="store_true",
                     help="Gera datasets dos experimentos A (0.4%% simetrico) "
                          "e B (ALTA 0.8%% / QUEDA 0.4%%) numa unica passada")
+    ap.add_argument("--fold-out",  default=None,
+                    help="Diretorio de saida de um fold walk-forward (receita B)")
+    ap.add_argument("--train-end", default=None, metavar="YYYY-MM-DD",
+                    help="Corte de treino do fold")
+    ap.add_argument("--val-end",   default=None, metavar="YYYY-MM-DD",
+                    help="Corte de validacao do fold")
     args = ap.parse_args()
 
     t0 = datetime.now()
-    if args.dual:
+    if args.fold_out:
+        if not (args.train_end and args.val_end):
+            ap.error("--fold-out exige --train-end e --val-end")
+        print("=== Trader.AI V5.9 — Preparacao de FOLD walk-forward ===\n")
+        prepare_fold(args.fold_out, args.train_end, args.val_end)
+    elif args.dual:
         print("=== Trader.AI V5.9 — Preparacao DUAL (experimentos A + B) ===\n")
         prepare_dual()
     else:

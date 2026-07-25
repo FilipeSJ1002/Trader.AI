@@ -71,12 +71,15 @@ def leverage_for(dir_conf: float, use_lev: bool, max_lev: float = 5.0) -> float:
     return min(lev, max_lev)
 
 
-def precompute(sym, btc_df):
-    """Pre-computa features e OHLC alinhados por timestamp."""
+def precompute(sym, btc_df, feat_fn=None):
+    """Pre-computa features e OHLC alinhados por timestamp.
+    feat_fn permite trocar o gerador de features (ex: 26 features da V6)."""
+    if feat_fn is None:
+        feat_fn = _add_features
     adf    = _load_parquet(sym)
     common = adf.index.intersection(btc_df.index)
     adf, btc_al = adf.loc[common], btc_df.loc[common]
-    feat_df = _add_features(adf, btc_al).dropna()
+    feat_df = feat_fn(adf, btc_al).dropna()
     feats   = feat_df.values.astype(np.float32)
     idx     = feat_df.index.values.astype("int64")
     close   = adf["close"].reindex(feat_df.index).values.astype(np.float64)
@@ -180,7 +183,7 @@ def run_backtest(split="test", use_lev=True, allow_short=True,
                  eval_step=15, max_hold_min=360,
                  model_path=MODEL_PATH,
                  sl_pct=0.005, tp_pct=0.010, max_lev=5.0,
-                 skip_syms=None):
+                 skip_syms=None, featset="v5"):
     """
     eval_step    : frequencia de avaliacao em minutos (padrao 15)
     max_hold_min : tempo maximo de posicao aberta em minutos (padrao 6h)
@@ -193,6 +196,12 @@ def run_backtest(split="test", use_lev=True, allow_short=True,
     device = get_device()
     skip_syms    = set(skip_syms or [])
     trade_assets = [s for s in ASSETS if s not in skip_syms]
+
+    # Seleciona o conjunto de features compativel com o modelo
+    if featset == "v6":
+        from v6_data_prep import add_features_v6 as feat_fn
+    else:
+        feat_fn = _add_features
 
     _val_start  = str(date.fromisoformat(TRAIN_END) + timedelta(days=1))
     _test_start = str(date.fromisoformat(VAL_END)   + timedelta(days=1))
@@ -225,11 +234,11 @@ def run_backtest(split="test", use_lev=True, allow_short=True,
     print(f"{'='*70}\n")
 
     btc_df = _load_parquet(BTC)
-    sample = precompute(trade_assets[0], btc_df)
+    sample = precompute(trade_assets[0], btc_df, feat_fn)
     model  = load_model(model_path, sample["feats"].shape[1], device)
 
-    print("Pre-computando features...")
-    data = {s: precompute(s, btc_df) for s in trade_assets}
+    print(f"Pre-computando features ({featset}: {sample['feats'].shape[1]} cols)...")
+    data = {s: precompute(s, btc_df, feat_fn) for s in trade_assets}
     for s in trade_assets:
         print(f"  {s}: {len(data[s]['feats'])} candles")
 
@@ -626,6 +635,9 @@ if __name__ == "__main__":
     ap.add_argument("--skip",      dest="skip_syms", default=None,
                     help="Ativos a nao operar, separados por virgula "
                          "(ex: BTCUSDT). Continuam como contexto.")
+    ap.add_argument("--featset",   choices=["v5", "v6"], default="v5",
+                    help="Conjunto de features: v5 (18) ou v6 (26). "
+                         "Deve casar com o modelo usado.")
     a = ap.parse_args()
 
     split = "val" if a.val else "test"
@@ -645,4 +657,5 @@ if __name__ == "__main__":
         tp_pct         = a.tp_pct,
         max_lev        = a.max_lev,
         skip_syms      = a.skip_syms.split(",") if a.skip_syms else None,
+        featset        = a.featset,
     )

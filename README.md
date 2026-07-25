@@ -5,7 +5,7 @@
 >
 > *Projeto de Trabalho de Conclusão de Curso (TCC) - Ciência da Computação.*
 
-![Status](https://img.shields.io/badge/Status-Etapa%205%20(IA%20Neural%20%26%20Estrat%C3%A9gia%20H%C3%ADbrida)-blue?style=for-the-badge)
+![Status](https://img.shields.io/badge/Status-Etapa%206%20(Walk--Forward%20%26%20Paper%20Trading)-blue?style=for-the-badge)
 ![Python](https://img.shields.io/badge/Python-3.10+-yellow?style=for-the-badge&logo=python&logoColor=white)
 ![PyTorch](https://img.shields.io/badge/IA-PyTorch%20%7C%20BiLSTM%20%2B%20Attention-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)
@@ -61,8 +61,12 @@ Trader.AI/
 ├── v5_model.py                # IA: Arquitetura BiLSTM + Attention (3 classes)
 ├── v5_train.py                # IA: Treino com Focal Loss e early stopping
 ├── v5_backtest.py             # IA: Backtest híbrido bidirecional (LONG/SHORT + TP/SL + regime)
-├── v5_run_experiments.py      # IA: Pipeline automático (prep -> treinos -> backtests)
-├── v5_model.pth               # Modelo V5.8 baseline (local, não versionado)
+├── v5_run_experiments.py      # IA: Pipeline de experimentos (prep -> treinos -> backtests)
+├── v5_walkforward.py          # IA: Walk-forward retraining (3 folds trimestrais)
+├── v5_live.py                 # IA: Motor híbrido em tempo real (paper trading)
+├── treino_pausar.cmd          # Pausa o treino e libera a GPU (1 clique)
+├── treino_retomar.cmd         # Retoma o treino de onde parou (1 clique)
+├── religar_trader.cmd         # Religa treino + live após reiniciar o PC
 ├── v5_model_b.pth             # Modelo V5.9-B vencedor (local, não versionado)
 │
 ├── download_binance_data.py   # ETL: Script de Extração (Download progressivo)
@@ -72,7 +76,7 @@ Trader.AI/
 ├── requirements.txt           # Lista de dependências e bibliotecas
 └── README.md                  # Documentação oficial
 ```
-
+             
 ---
 
 ##  Instalação e Execução
@@ -184,7 +188,19 @@ python teste_saldo.py
 - [x] **Etapa 3:** Conexão com API Binance via WebSockets e Decisões em Tempo Real.
 - [x] **Etapa 4:** Execução de Ordens (Integração de Contas, Scoring e Live Trading).
 - [x] **Etapa 5:** Rede Neural Direcional (BiLSTM + Attention) e Estratégia Híbrida Bidirecional (LONG/SHORT).
-- [ ] **Etapa 6:** *Walk-forward retraining* trimestral e integração do modelo híbrido ao motor de execução em tempo real.
+- [x] **Etapa 6:** Validação *walk-forward* trimestral e motor de *paper trading* em tempo real com dados reais da Binance.
+- [ ] **Etapa 7:** Aumento do volume de sinais de alta convicção e execução real na Binance Futures (Testnet).
+
+###  Achado da Etapa 6 (walk-forward)
+
+Comparação honesta entre **retreinar o modelo a cada trimestre** vs. usar um **modelo congelado**, em 3 trimestres de dados nunca vistos (Q4-2025 a Q2-2026):
+
+| Estratégia | Lucro acumulado (3 trimestres) |
+|---|---|
+| Modelo retreinado a cada trimestre | +2,0% |
+| Modelo congelado (jun/2025) | +2,0% |
+
+**Conclusão:** o retreino trimestral não trouxe ganho — o modelo congelado generaliza bem por ~11 meses. A próxima alavanca de melhoria é aumentar o volume de sinais de alta convicção, não o cronograma de treino.
 
 ---
 

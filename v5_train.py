@@ -14,6 +14,8 @@ Acompanhe ao vivo:  Get-Content v5_training.log -Wait
 """
 import os
 import gc
+import json
+import time
 import random
 import numpy as np
 import torch
@@ -38,6 +40,9 @@ DATA_DIR    = "data_v5"
 Y_DIR       = None            # se definido, carrega y deste diretorio (X compartilhado)
 LOG_PATH    = "v5_training.log"
 RUN_LABEL   = "V5.8"
+RESUME      = False           # se True, retoma pesos de MODEL_PATH se existir
+PAUSE_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "v5_train.pause")   # existir = pausar | apagar = retomar
 
 
 class FocalLoss(nn.Module):
@@ -76,6 +81,38 @@ def log(msg: str = ""):
     print(msg, flush=True)
     with open(LOG_PATH, "a", encoding="utf-8") as f:
         f.write(msg + "\n")
+
+
+def _optimizer_to(optimizer, device):
+    """Move o estado do AdamW (exp_avg etc.) entre CPU e GPU."""
+    for state in optimizer.state.values():
+        for k, v in state.items():
+            if torch.is_tensor(v):
+                state[k] = v.to(device)
+
+
+def wait_if_paused(model, optimizer, device):
+    """
+    Pausa cooperativa: se v5_train.pause existir, MOVE TUDO PARA A CPU
+    (libera a VRAM inteira para o usuario usar o PC) e espera ate o
+    arquivo ser apagado. Checado entre ativos (~1-2 min de resposta).
+
+    Pausar : treino_pausar.cmd   (ou criar o arquivo v5_train.pause)
+    Retomar: treino_retomar.cmd  (ou apagar o arquivo)
+    """
+    if not os.path.exists(PAUSE_FILE):
+        return
+    log(f"[PAUSA] v5_train.pause detectado — liberando GPU e aguardando...")
+    if device == "cuda":
+        model.cpu()
+        _optimizer_to(optimizer, "cpu")
+        torch.cuda.empty_cache()
+    while os.path.exists(PAUSE_FILE):
+        time.sleep(10)
+    if device == "cuda":
+        model.to(device)
+        _optimizer_to(optimizer, device)
+    log(f"[PAUSA] arquivo removido — retomando treino ({datetime.now():%H:%M:%S}).")
 
 
 def load_alt(split: str, sym: str):
@@ -220,15 +257,35 @@ def train():
     model = get_model(n_features, device)
     log(f"Features: {n_features} | Janela: 120 | Modelo: {count_params(model):,} params\n")
 
+    # Resume: retoma do checkpoint salvo (crash de GPU/RAM nao perde progresso)
+    if RESUME and os.path.exists(MODEL_PATH):
+        try:
+            model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
+            log(f"[RESUME] Pesos carregados de {MODEL_PATH} — continuando treino.")
+        except Exception as e:
+            log(f"[RESUME] Falha ao carregar checkpoint ({e}) — treino do zero.")
+
     criterion = FocalLoss(gamma=FOCAL_GAMMA, weight=weights)
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=2e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=LR_MIN)
 
+    # best_val_loss persiste em {modelo}.meta.json — um resume nunca
+    # sobrescreve um checkpoint melhor com um pior
+    meta_path = MODEL_PATH + ".meta.json"
     best_val_loss, patience_ct = float("inf"), 0
+    if RESUME and os.path.exists(meta_path):
+        try:
+            with open(meta_path, encoding="utf-8") as f:
+                best_val_loss = float(json.load(f)["best_val_loss"])
+            log(f"[RESUME] best_val_loss restaurado: {best_val_loss:.4f}")
+        except Exception:
+            pass
+
     log(f"{'Ep':>3} {'TrLoss':>7} {'VaLoss':>7} {'Acc':>6} {'ALTA@60':>14} {'QUEDA@60':>14}  Hora")
     log("-" * 74)
 
     for epoch in range(1, EPOCHS + 1):
+        wait_if_paused(model, optimizer, device)
         model.train()
         tot_loss, nb = 0.0, 0
         # Ciclos: cada epoch faz CYCLES_PER_EPOCH passadas com ordem re-embaralhada.
@@ -236,6 +293,8 @@ def train():
         for _cycle in range(CYCLES_PER_EPOCH):
             order = ASSETS[:]; random.shuffle(order)
             for sym in order:
+                wait_if_paused(model, optimizer, device)
+                model.train()
                 X, y = load_alt("train", sym)
                 if X is None:
                     continue
@@ -267,6 +326,9 @@ def train():
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             torch.save(model.state_dict(), MODEL_PATH)
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump({"best_val_loss": best_val_loss, "epoch": epoch,
+                           "label": RUN_LABEL}, f)
             patience_ct = 0
             mark = "  <- melhor"
         else:
@@ -335,6 +397,10 @@ if __name__ == "__main__":
                     help="Arquivo de log (padrao v5_training.log)")
     ap.add_argument("--label",     default=RUN_LABEL,
                     help="Rotulo da run para o log (ex: V5.9-A)")
+    ap.add_argument("--resume",    action="store_true",
+                    help="Retoma do checkpoint em --model-out, se existir")
+    ap.add_argument("--batch",     type=int, default=None,
+                    help="Sobrescreve BATCH_SIZE (menor = menos VRAM)")
     args = ap.parse_args()
 
     # Rebind dos globais usados pelas funcoes de treino
@@ -343,6 +409,9 @@ if __name__ == "__main__":
     MODEL_PATH = args.model_out
     LOG_PATH   = args.log
     RUN_LABEL  = args.label
+    RESUME     = args.resume
+    if args.batch:
+        BATCH_SIZE = args.batch
 
     t0 = datetime.now()
     try:
