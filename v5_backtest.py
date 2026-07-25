@@ -51,23 +51,74 @@ LEV_LABELS = {
 }
 
 
-def leverage_for(dir_conf: float, use_lev: bool, max_lev: float = 5.0) -> float:
-    """
-    Converte confianca direcional do NN em alavancagem.
-    dir_conf = p_direcao / (p_alta + p_queda)  [0.5 = empate, 1.0 = certeza]
+# ── Curvas de alavancagem ────────────────────────────────────────────────────
+# Cada curva e uma lista (limiar_dir_conf, alavancagem), do maior para o menor.
+#
+# MOTIVACAO (medido em 25/07/2026 com v6_edge_por_faixa.py):
+#   O edge direcional real do modelo NAO cresce com a confianca — ele PIORA:
+#     0,52-0,57 -> edge 0,530   (curva "v59" da 1x)
+#     0,57-0,62 -> edge 0,538   (pico!)      (curva "v59" da 2x)
+#     0,62-0,67 -> edge 0,515               (curva "v59" da 5x  <- anti-correlacionado)
+#     0,67-0,72 -> edge 0,505
+#   Ou seja: a curva historica aposta MAIS onde o modelo acerta MENOS.
+CURVAS_LEV = {
+    # Historica da V5.9 (teto 5x aplicado por max_lev)
+    "v59":   [(0.72, 20.0), (0.67, 10.0), (0.62, 5.0), (0.57, 2.0), (0.52, 1.0)],
+    # Alinhada ao edge medido: peso no pico (0,57-0,62), corta o excesso acima
+    "edge":  [(0.62, 1.0), (0.57, 5.0), (0.52, 2.0)],
+    # Conservadora: so opera a faixa de maior edge
+    "pico":  [(0.62, 0.0), (0.57, 5.0), (0.52, 0.0)],
+    # Sem discriminacao: mesma aposta em tudo que passa do limiar
+    "flat2": [(0.52, 2.0)],
+    "flat1": [(0.52, 1.0)],
+    # Condicionadas ao REGIME (tratadas em codigo, ver leverage_for):
+    # alavancam so quando a tendencia esta forte; em lateral operam 1x.
+    "regime":      [],
+    "regime_pico": [],
+}
 
-    max_lev limita a alavancagem: os backtests mostraram que a faixa 62-67%
-    (5x) e a unica consistentemente lucrativa — confiancas de 67%+ nao sao
-    calibradas (poucas amostras no treino) e perdem dinheiro em 10x/20x.
+
+def leverage_for(dir_conf: float, use_lev: bool, max_lev: float = 5.0,
+                 curva: str = "v59", forca: float = None,
+                 forca_min: float = 1.5) -> float:
+    """
+    Converte confianca direcional do NN (e, opcionalmente, a forca da
+    tendencia) em alavancagem.
+
+    dir_conf = p_direcao / (p_alta + p_queda)  [0.5 = empate, 1.0 = certeza]
+    forca    = |preco - SMA24h| / SMA24h, normalizada pela mediana do ativo.
+               So e usada nas curvas "regime*" — ver CURVAS_LEV.
+
+    Evidencia (25/07/2026): alavancar so compensa em tendencia forte. Em
+    mercado lateral a alavancagem multiplica taxas e variancia sem melhorar
+    a expectativa (edge ~0,50) — sem alavancagem alguma o sistema foi
+    1,2 pp melhor na validacao.
     """
     if not use_lev:
         return 1.0 if dir_conf >= 0.52 else 0.0
-    if   dir_conf >= 0.72: lev = 20.0
-    elif dir_conf >= 0.67: lev = 10.0
-    elif dir_conf >= 0.62: lev =  5.0
-    elif dir_conf >= 0.57: lev =  2.0
-    elif dir_conf >= 0.52: lev =  1.0
-    else:                  lev =  0.0
+
+    # Curvas condicionadas ao regime: alavanca so quando a tendencia e forte
+    if curva.startswith("regime"):
+        if dir_conf < 0.52:
+            return 0.0
+        forte = (forca is not None and forca >= forca_min)
+        if curva == "regime":
+            # Tendencia forte -> escada normal; lateral -> 1x (so paga o spread)
+            lev = 5.0 if dir_conf >= 0.62 else (2.0 if dir_conf >= 0.57 else 1.0)
+            return min(lev if forte else 1.0, max_lev)
+        if curva == "regime_pico":
+            # Tendencia forte -> concentra na faixa de melhor edge; lateral -> 1x
+            if forte:
+                lev = 5.0 if 0.57 <= dir_conf < 0.62 else 2.0
+            else:
+                lev = 1.0
+            return min(lev, max_lev)
+
+    lev = 0.0
+    for limiar, valor in CURVAS_LEV.get(curva, CURVAS_LEV["v59"]):
+        if dir_conf >= limiar:
+            lev = valor
+            break
     return min(lev, max_lev)
 
 
@@ -89,14 +140,25 @@ def precompute(sym, btc_df, feat_fn=None):
     # Regime DIARIO: preco vs media movel de 24h (1440 min).
     # A EMA200 de 1m cobre so ~3.3h — inutil como filtro de tendencia.
     # regime_down=True -> mercado em queda no diario -> permite SHORT, bloqueia LONG
+    close_al = adf["close"].reindex(feat_df.index)
     sma_24h = adf["close"].rolling(1440).mean().reindex(feat_df.index)
-    regime_down = (adf["close"].reindex(feat_df.index) < sma_24h).fillna(False).values
+    regime_down = (close_al < sma_24h).fillna(False).values
+
+    # FORCA da tendencia = |preco - SMA24h| / SMA24h, normalizada pela
+    # volatilidade tipica do ativo (senao ativos volateis parecem sempre
+    # "em tendencia forte"). Usado pela alavancagem por regime: os backtests
+    # mostraram que alavancar so compensa quando ha tendencia forte —
+    # em mercado lateral a alavancagem so multiplica taxas e ruido.
+    dist_rel = ((close_al - sma_24h).abs() / (sma_24h + 1e-9))
+    vol_tipica = dist_rel.rolling(1440, min_periods=120).median()
+    regime_forca = (dist_rel / (vol_tipica + 1e-9)).fillna(0.0).values
 
     return {
         "feats": feats, "idx": idx, "close": close, "low": low,
         "high": high, "ts": feat_df.index,
         "feat_cols": list(feat_df.columns),
         "regime_down": regime_down,
+        "regime_forca": regime_forca,
     }
 
 
@@ -183,7 +245,9 @@ def run_backtest(split="test", use_lev=True, allow_short=True,
                  eval_step=15, max_hold_min=360,
                  model_path=MODEL_PATH,
                  sl_pct=0.005, tp_pct=0.010, max_lev=5.0,
-                 skip_syms=None, featset="v5"):
+                 skip_syms=None, featset="v5", assets=None,
+                 sl_mode="fixed", atr_k=1.2, sl_floor=0.004, sl_cap=0.020,
+                 lev_curve="v59", ablacao=None, forca_min=1.5):
     """
     eval_step    : frequencia de avaliacao em minutos (padrao 15)
     max_hold_min : tempo maximo de posicao aberta em minutos (padrao 6h)
@@ -195,7 +259,8 @@ def run_backtest(split="test", use_lev=True, allow_short=True,
     """
     device = get_device()
     skip_syms    = set(skip_syms or [])
-    trade_assets = [s for s in ASSETS if s not in skip_syms]
+    universo     = assets if assets else ASSETS
+    trade_assets = [s for s in universo if s not in skip_syms]
 
     # Seleciona o conjunto de features compativel com o modelo
     if featset == "v6":
@@ -225,9 +290,17 @@ def run_backtest(split="test", use_lev=True, allow_short=True,
     print(f"  Capital: ${START_USD:,.0f} | Margem: {MARGIN_PCT*100:.0f}%/op | Fee: {FEE*100:.2f}%/lado")
     print(f"  ENTRADA: V1 score >= {v1_buy_thresh} + NN dir_conf >= 52%")
     print(f"           Regime SMA 24h: alta->so LONG | baixa->so SHORT")
-    print(f"  SAIDA  : TP +{tp_pct*100:.1f}% | SL -{sl_pct*100:.1f}% | "
-          f"sinal V1 contrario | max {max_hold_min}min")
-    print(f"  Alavancagem max: {max_lev:.0f}x | Verifica a cada {eval_step}min")
+    if sl_mode == "atr":
+        print(f"  SAIDA  : SL = {atr_k}x ATR do ativo "
+              f"[{sl_floor*100:.1f}%-{sl_cap*100:.1f}%] | TP = 2x SL (R/R 2:1) | "
+              f"sinal V1 contrario | max {max_hold_min}min")
+    else:
+        print(f"  SAIDA  : TP +{tp_pct*100:.1f}% | SL -{sl_pct*100:.1f}% | "
+              f"sinal V1 contrario | max {max_hold_min}min")
+    print(f"  Alavancagem: curva '{lev_curve}' (max {max_lev:.0f}x) | "
+          f"Verifica a cada {eval_step}min")
+    if ablacao:
+        print(f"  *** ABLACAO ATIVA: {ablacao} ***")
     print(f"  Modelo: {model_path}")
     if skip_syms:
         print(f"  Ativos excluidos: {', '.join(sorted(skip_syms))} (so contexto)")
@@ -401,6 +474,13 @@ def run_backtest(split="test", use_lev=True, allow_short=True,
         dir_long  = p_up   / p_dir
         dir_short = p_down / p_dir
 
+        # ABLACAO "sem_nn": neutraliza a rede neural — todo candidato V1 passa
+        # com confianca fixa de 0,60 (equivalente a 2x na curva v59). Serve para
+        # medir quanto do resultado vem da NN e quanto vem de V1 + regime.
+        if ablacao == "sem_nn":
+            dir_long  = np.full_like(dir_long, 0.60)
+            dir_short = np.full_like(dir_short, 0.60)
+
         # Seleciona melhor candidato (V1 score × dir_conf)
         best = None; best_strength = 0.0
         for i, (s, cur, direction, v1_sc) in enumerate(metas):
@@ -416,7 +496,8 @@ def run_backtest(split="test", use_lev=True, allow_short=True,
             continue
 
         sym_b, cur_b, dir_b, v1_b, dc_b = best
-        lev = leverage_for(dc_b, use_lev, max_lev)
+        forca_b = float(data[sym_b]["regime_forca"][cur_b])
+        lev = leverage_for(dc_b, use_lev, max_lev, lev_curve, forca_b, forca_min)
         if lev == 0.0:
             continue
 
@@ -424,12 +505,26 @@ def run_backtest(split="test", use_lev=True, allow_short=True,
         entry  = d["close"][cur_b]
         margin = cap * MARGIN_PCT
 
+        # Stops adaptativos: cada ativo tem um "ruido natural" diferente. Um SL
+        # fixo de 0,5% e menor que a flutuacao normal de ativos volateis (ADA,
+        # DOT) -> estopa por ruido antes do movimento a favor. Escalando pelo
+        # ATR do proprio ativo, o stop fica sempre FORA do ruido dele.
+        # Mantem R/R 2:1 (tp = 2 x sl). Bandas evitam extremos absurdos.
+        sl_i, tp_i = sl_pct, tp_pct
+        if sl_mode == "atr":
+            i_atr = d["feat_cols"].index("atr_pct") if "atr_pct" in d["feat_cols"] else -1
+            if i_atr >= 0:
+                atr_now = float(d["feats"][cur_b][i_atr])
+                if atr_now > 0:
+                    sl_i = min(max(atr_k * atr_now, sl_floor), sl_cap)
+                    tp_i = sl_i * 2.0
+
         if dir_b == "LONG":
-            sl_price = entry * (1 - sl_pct)
-            tp_price = entry * (1 + tp_pct)
+            sl_price = entry * (1 - sl_i)
+            tp_price = entry * (1 + tp_i)
         else:
-            sl_price = entry * (1 + sl_pct)
-            tp_price = entry * (1 - tp_pct)
+            sl_price = entry * (1 + sl_i)
+            tp_price = entry * (1 - tp_i)
 
         positions[sym_b] = {
             "ts":        ts,
@@ -638,7 +733,40 @@ if __name__ == "__main__":
     ap.add_argument("--featset",   choices=["v5", "v6"], default="v5",
                     help="Conjunto de features: v5 (18) ou v6 (26). "
                          "Deve casar com o modelo usado.")
+    ap.add_argument("--forca-min", dest="forca_min", type=float, default=1.5,
+                    help="Forca minima da tendencia para alavancar nas curvas "
+                         "regime* (1.0 = distancia mediana; padrao 1.5)")
+    ap.add_argument("--ablacao",   choices=["sem_nn"], default=None,
+                    help="sem_nn: neutraliza a rede neural (todo sinal V1 passa "
+                         "com conf fixa) — mede a contribuicao real da NN")
+    ap.add_argument("--lev-curve", dest="lev_curve",
+                    choices=list(CURVAS_LEV.keys()), default="v59",
+                    help="Curva de alavancagem: v59 (historica), edge "
+                         "(alinhada ao edge medido), pico, flat1, flat2")
+    ap.add_argument("--sl-mode",   dest="sl_mode", choices=["fixed", "atr"],
+                    default="fixed",
+                    help="fixed: SL/TP percentuais fixos (V5.9). "
+                         "atr: SL = k x ATR do ativo, TP = 2x SL (adaptativo)")
+    ap.add_argument("--atr-k",     dest="atr_k", type=float, default=1.2,
+                    help="Multiplicador do ATR quando --sl-mode atr (padrao 1.2)")
+    ap.add_argument("--sl-floor",  dest="sl_floor", type=float, default=0.004,
+                    help="Piso do SL adaptativo (padrao 0.004 = 0.4%%)")
+    ap.add_argument("--sl-cap",    dest="sl_cap", type=float, default=0.020,
+                    help="Teto do SL adaptativo (padrao 0.020 = 2.0%%)")
+    ap.add_argument("--assets",    default=None,
+                    help="Universo de ativos separado por virgula. "
+                         "Padrao: os 6 do treino. Ex: --assets ALL para os 11 "
+                         "disponiveis em data/")
     a = ap.parse_args()
+
+    universo = None
+    if a.assets:
+        if a.assets.upper() == "ALL":
+            import glob as _glob, os as _os
+            universo = sorted(_os.path.basename(p).replace("_1m.parquet", "")
+                              for p in _glob.glob("data/*_1m.parquet"))
+        else:
+            universo = [s.strip().upper() for s in a.assets.split(",")]
 
     split = "val" if a.val else "test"
     run_backtest(
@@ -658,4 +786,12 @@ if __name__ == "__main__":
         max_lev        = a.max_lev,
         skip_syms      = a.skip_syms.split(",") if a.skip_syms else None,
         featset        = a.featset,
+        assets         = universo,
+        sl_mode        = a.sl_mode,
+        atr_k          = a.atr_k,
+        sl_floor       = a.sl_floor,
+        sl_cap         = a.sl_cap,
+        lev_curve      = a.lev_curve,
+        ablacao        = a.ablacao,
+        forca_min      = a.forca_min,
     )

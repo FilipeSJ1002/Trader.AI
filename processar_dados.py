@@ -9,6 +9,12 @@ CAMINHOS_PASTAS = {
     "SOLUSDT":  r"C:\Users\filip\Downloads\datasets_brutos\SOL-USDT_datasets_brutos",
     "BNBUSDT":  r"C:\Users\filip\Downloads\datasets_brutos\BNB-USDT_datasets_brutos",
     "AVAXUSDT": r"C:\Users\filip\Downloads\datasets_brutos\AVAX-USDT_datasets_brutos",
+    # V6: novos pares
+    "DOGEUSDT": r"C:\Users\filip\Downloads\datasets_brutos\DOGE-USDT_datasets_brutos",
+    "LINKUSDT": r"C:\Users\filip\Downloads\datasets_brutos\LINK-USDT_datasets_brutos",
+    "ADAUSDT":  r"C:\Users\filip\Downloads\datasets_brutos\ADA-USDT_datasets_brutos",
+    "DOTUSDT":  r"C:\Users\filip\Downloads\datasets_brutos\DOT-USDT_datasets_brutos",
+    "LTCUSDT":  r"C:\Users\filip\Downloads\datasets_brutos\LTC-USDT_datasets_brutos",
 }
 
 def processar_dados():

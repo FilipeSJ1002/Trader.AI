@@ -63,9 +63,15 @@ def get_model(n_features: int, device: str = "cpu") -> TradingLSTM:
 
 
 def get_device() -> str:
-    if torch.cuda.is_available():
-        print(f"[GPU] {torch.cuda.get_device_name(0)}")
-        return "cuda"
+    # CUDA_VISIBLE_DEVICES="" faz is_available() retornar True em algumas versoes
+    # do PyTorch, mas sem nenhum device valido -> testa de fato antes de usar.
+    try:
+        if torch.cuda.is_available() and torch.cuda.device_count() > 0:
+            print(f"[GPU] {torch.cuda.get_device_name(0)}")
+            return "cuda"
+    except Exception as e:
+        print(f"[CPU] GPU indisponivel ({type(e).__name__}). Usando CPU.")
+        return "cpu"
     print("[CPU] GPU nao detectada. Usando CPU.")
     return "cpu"
 

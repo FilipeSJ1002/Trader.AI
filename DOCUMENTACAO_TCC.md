@@ -92,7 +92,10 @@ V1 como gatilho de entrada e a rede neural como confirmador de direção.
 - **Fonte:** API da **Binance** (dados públicos de mercado).
 - **Granularidade:** candles de **1 minuto** (OHLCV — abertura, máxima, mínima, fechamento, volume).
 - **Período:** **janeiro/2019 a maio/2026** (~3,9 milhões de candles por ativo no caso do BTC).
-- **Ativos (6):** BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, XRPUSDT, AVAXUSDT.
+- **Ativos operados (6):** BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, XRPUSDT, AVAXUSDT.
+- **Ativos disponíveis (11):** os seis acima mais DOGEUSDT, LINKUSDT, ADAUSDT, DOTUSDT,
+  LTCUSDT. A expansão do universo operado foi testada e rejeitada (seção 11.4) — os cinco
+  pares adicionais permanecem na base para experimentos futuros.
 - **Armazenamento:** arquivos **Parquet** (formato colunar comprimido, leitura rápida).
 - **ETL:** `download_binance_data.py` (extração paginada) e `processar_dados.py`
   (limpeza e conversão para Parquet).
@@ -299,6 +302,10 @@ Dois modelos foram treinados com a **mesma arquitetura**, mudando apenas os limi
 O modelo **B venceu** — confirmando a hipótese de que detectar quedas com sensibilidade é
 mais valioso, dado que o período de teste foi um *bear market*.
 
+> **Ressalva:** esse +11,1% foi obtido em configuração ainda sem gestão de risco
+> estruturada, e o mesmo modelo perdia 19,6% na validação. O número **não** representa
+> o sistema final (+2,0%); serve apenas como comparação entre rotulagens.
+
 ### 11.2 Walk-Forward (retreinar vale a pena?)
 
 Comparação entre **retreinar o modelo a cada trimestre** vs. **modelo congelado**, em três
@@ -315,6 +322,59 @@ trimestres de dados nunca vistos (`v5_walkforward.py`):
 trouxe ganho** — o modelo congelado generaliza bem por ~11 meses. Isso simplifica a operação
 em produção e indica que a próxima alavanca de melhoria **não** é o cronograma de treino.
 
+### 11.3 Ablação — a contribuição da rede neural
+
+Executar a estratégia com e sem o filtro neural, mantendo todo o resto constante:
+
+| Período | Com rede neural | Sem rede neural | Contribuição |
+|---|---|---|---|
+| Validação H2-2025 | −2,0% (55 ops) | −4,1% (232 ops) | **+2,1 p.p.** |
+| Teste jan–jul/2026 | **+2,0%** (68 ops) | **−6,0%** (246 ops) | **+8,0 p.p.** |
+| *Holdout* virgem | +0,2% (17 ops) | −0,6% (57 ops) | **+0,8 p.p.** |
+
+**Resultado: a rede neural é essencial** — sem ela o sistema perde dinheiro em todos os
+períodos.
+
+**Lição metodológica relevante:** uma medição anterior avaliou a capacidade preditiva da
+rede isoladamente (taxa de acerto direcional em janelas arbitrárias do mercado) e obteve
+valor próximo de 0,50 — equivalente ao acaso. Essa métrica sugeriria que o componente era
+dispensável. A ablação demonstrou o contrário. A explicação está na natureza da tarefa: a
+rede não prevê a direção do mercado a partir do zero; ela **discrimina entre candidatos
+previamente filtrados pelos indicadores técnicos**. Métricas devem ser aferidas no contexto
+real de aplicação.
+
+### 11.4 Hipóteses de melhoria refutadas
+
+Três hipóteses foram formuladas e rejeitadas com evidência nos três *splits*:
+
+| Hipótese | Resultado |
+|---|---|
+| Ampliar o universo de 6 para 11 ativos | −0,7% no teste (contra +2,0% com 6 ativos) |
+| Stops adaptativos por volatilidade (ATR) | Stop fixo venceu com multiplicadores de 6 a 12 |
+| Enriquecer features (18 → 26 variáveis) | Erro de validação superior ao modelo vigente |
+
+### 11.5 Achado transversal — alavancagem e regime de mercado
+
+Comparação de curvas de alavancagem na validação:
+
+| Curva | Comportamento | Validação |
+|---|---|---|
+| Concentrada na faixa de melhor discriminação | Seletiva | +0,5% |
+| **Sem alavancagem** | Exposição 1x | −0,8% |
+| Histórica (proporcional à confiança) | Até 5x | −2,0% |
+
+Operar **sem alavancagem alguma** superou a configuração vigente em 1,2 ponto percentual em
+mercado lateral. A explicação é econômica: os custos de transação escalam com o valor
+nocional. Com margem preditiva modesta, a alavancagem não melhora o valor esperado —
+amplifica o custo de fricção e a variância.
+
+Uma variante condicionada à força da tendência apresentou soma superior (+1,0% contra +0,2%)
+e variância substancialmente menor, porém desempenho inferior em mercado de forte tendência.
+Trata-se de um compromisso entre retorno e consistência, não de melhoria absoluta.
+
+> O detalhamento completo da metodologia e de todos os experimentos está em
+> `METODOLOGIA_EXPERIMENTAL.md`.
+
 ---
 
 ## 12. Backtesting (Metodologia de Avaliação)
@@ -328,13 +388,38 @@ O backtest (`v5_backtest.py`) simula a operação real candle a candle, com real
 
 ### Resultados principais (modelo B, configuração final)
 
-| Período | Trader.AI | Comprar e segurar BTC | Liquidações |
-|---------|-----------|------------------------|-------------|
-| Teste (jan–mai/2026, *bear*) | **+1,8%** | −15,9% | 0 |
-| Validação (jul–dez/2025) | −2,0% | −18,2% | 0 |
+| Período | Trader.AI | Comprar e segurar BTC | Vantagem | Liquidações |
+|---------|-----------|------------------------|----------|-------------|
+| **Teste jan–jul/2026** (*bear*) | **+2,0%** | −26,8% | **+28,8 p.p.** | 0 |
+| **Holdout virgem jun–jul/2026** | **+0,2%** | −13,0% | **+13,2 p.p.** | 0 |
+| Validação jul–dez/2025 (lateral) | −2,0% | −18,2% | +16,2 p.p. | 0 |
 
-O sistema **supera o BTC em ~18 pontos percentuais** em ambos os períodos e **nunca foi
-liquidado** — ou seja, protege capital em mercados adversos, que era o objetivo central.
+O sistema **supera o BTC em 13 a 29 pontos percentuais** em todos os períodos e **nunca
+foi liquidado** — ou seja, protege capital em mercados adversos, que era o objetivo central.
+
+A **taxa de acerto foi idêntica (41,2%)** no período de teste e no *holdout* virgem —
+evidência de estabilidade comportamental, e não de calibração afortunada.
+
+> **Nota sobre o *holdout* virgem:** os dados de junho e julho de 2026 foram obtidos
+> em 25/07/2026, *após* o congelamento de toda a arquitetura, parâmetros e limiares.
+> Nenhuma decisão de projeto pôde ser influenciada por eles — trata-se da aproximação
+> mais fiel de operação real sem exposição de capital.
+
+### Estudo de ablação: qual a contribuição da rede neural?
+
+O experimento mais importante do projeto executa a estratégia de forma **idêntica**,
+com e sem o filtro neural, isolando sua contribuição:
+
+| Período | Com rede neural | Sem rede neural | Contribuição |
+|---|---|---|---|
+| Validação H2-2025 | −2,0% (55 ops) | −4,1% (232 ops) | **+2,1 p.p.** |
+| Teste jan–jul/2026 | **+2,0%** (68 ops) | **−6,0%** (246 ops) | **+8,0 p.p.** |
+| *Holdout* virgem | +0,2% (17 ops) | −0,6% (57 ops) | **+0,8 p.p.** |
+
+**Sem a rede neural o sistema é deficitário em todos os períodos.** Ela descarta cerca
+de 75% dos sinais gerados pelos indicadores técnicos e eleva a taxa de acerto de 36,6%
+para 41,2%. Este resultado sustenta empiricamente a tese central do trabalho: **a
+arquitetura híbrida supera cada componente isolado**.
 
 ---
 
@@ -383,22 +468,38 @@ uso normal do PC), foram implementados mecanismos de resiliência:
 
 ## 16. Limitações Conhecidas e Trabalhos Futuros
 
-**Limitações atuais:**
-1. **Bandas de Bollinger ausentes nas features** do modelo neural (incompatibilidade de nomes
-   na versão beta do `pandas-ta`) — o modelo opera com 18 das 20 features projetadas.
-2. **Baixa frequência de sinais de alta confiança:** o modelo raramente ultrapassa 60% de
-   confiança direcional, então a alavancagem de 5x quase nunca é acionada, limitando o lucro
-   a ~0,3%/mês.
-3. **Retorno modesto:** o sistema preserva capital e supera o BTC, mas ainda não atinge a meta
-   de lucro diário consistente de um "*day trader* profissional".
+**Limitações metodológicas:**
+1. **Ausência de validação em execução real.** Todos os resultados provêm de simulação.
+   *Slippage*, latência, rejeição de ordens e custos de *funding* não estão modelados.
+2. **Amostras pequenas em recortes específicos.** O *holdout* virgem contém 17 operações;
+   configurações mais seletivas chegam a 5–8. Conclusões nesses recortes carregam incerteza
+   estatística elevada.
+3. **Sobreposição parcial entre períodos.** O teste (jan–jul/2026) contém o *holdout*
+   (jun–jul/2026); comparações estritamente independentes exigem separar jan–mai de jun–jul.
+4. **Período de avaliação predominantemente baixista.** O desempenho em mercado altista
+   sustentado permanece não caracterizado.
 
-**Trabalhos futuros (Etapa 7):**
-- Aumentar o **volume de sinais de alta convicção** (revisão de features e/ou arquitetura) —
-  identificada como a principal alavanca de melhoria.
-- Corrigir e reincorporar as features de Bollinger.
-- Execução real na **Binance Futures (Testnet)** com ordens *short* e TP/SL nativos.
-- Explorar *fine-tuning* incremental disparado por **divergência** entre o desempenho ao vivo
-  e o esperado (em vez de retreino em calendário fixo, já descartado pelo walk-forward).
+**Limitações técnicas:**
+5. **Duas features projetadas não são geradas** (Bandas de Bollinger) por incompatibilidade de
+   nomes na versão beta do `pandas-ta` — o modelo em produção opera com 18 das 20 variáveis
+   previstas. A correção foi implementada na V6, mas o modelo resultante ainda não superou o
+   vigente.
+6. **Calibração imperfeita da confiança.** O *edge* medido não cresce monotonicamente com a
+   confiança declarada pelo modelo, o que limita o uso da alavancagem proporcional.
+7. **Retorno modesto:** o sistema preserva capital e supera consistentemente o BTC, mas não
+   atinge a meta de lucro diário expressivo.
+8. **A estratégia híbrida ainda não está integrada ao motor de execução.** O bot que emite
+   ordens (`main.py`) opera com a estratégia de *trend-following* da V4.
+
+**Trabalhos futuros (Etapa 8):**
+- **Ponte para execução real:** integrar a estratégia híbrida validada ao motor de ordens,
+  com suporte a Binance Futures (posições vendidas, ordens TP/SL nativas, margem isolada).
+- **Validação em Testnet** por período prolongado, comparando o desempenho observado com o
+  previsto pelo backtest.
+- **Fortalecer a capacidade discriminativa** do modelo — identificada como o gargalo real
+  após a série de experimentos da V6.
+- **Monitoramento de divergência** entre desempenho ao vivo e esperado, como gatilho para
+  retreinamento (o retreino em calendário fixo foi descartado empiricamente).
 
 ---
 
@@ -407,15 +508,31 @@ uso normal do PC), foram implementados mecanismos de resiliência:
 O Trader.AI demonstra que a combinação de **regras técnicas determinísticas** com um
 **classificador neural sequencial** produz um sistema de negociação que **opera nos dois
 sentidos do mercado e preserva capital em condições adversas** — superando a estratégia
-passiva de comprar e segurar BTC em ~18 pontos percentuais, sem nunca ter sido liquidado.
+passiva de comprar e segurar BTC em 13 a 29 pontos percentuais, sem jamais ter sido
+liquidado.
 
-Mais importante para o rigor acadêmico: o projeto adota **avaliação walk-forward honesta**
-(sem vazamento de futuro), documenta **resultados negativos** (o retreino trimestral não
-ajudou) e baseia decisões de engenharia em **evidência empírica** (o teto de alavancagem de
-5x, a escolha do modelo B). O sistema é uma base sólida e cientificamente defensável, com um
-caminho de evolução claramente identificado.
+A contribuição da rede neural, frequentemente assumida em trabalhos da área, foi aqui
+**quantificada por ablação**: sua remoção torna o sistema deficitário em todos os períodos
+analisados, o que atribui a ela **+8,0 pontos percentuais** no período de teste. Este
+resultado sustenta empiricamente a tese central — a arquitetura híbrida supera cada
+componente isolado.
+
+Do ponto de vista do rigor acadêmico, o projeto adota **avaliação walk-forward** sem
+vazamento temporal, incorpora um **conjunto de validação virgem** obtido após o congelamento
+das decisões, define **critérios de promoção anteriores à observação dos resultados** e
+**documenta seus resultados negativos** com a mesma ênfase dos positivos. Das nove hipóteses
+formuladas ao longo do desenvolvimento, quatro foram refutadas — e essas refutações foram
+determinantes para localizar o gargalo real do sistema.
+
+A investigação também produziu achados de valor transferível: a **alavancagem comporta-se
+como multiplicador de regime, não de competência preditiva**; e **métricas de desempenho
+devem ser aferidas no contexto real de uso**, sob pena de conduzirem à conclusão oposta — como
+quase ocorreu com o componente mais valioso da arquitetura.
+
+O sistema constitui, portanto, uma base sólida e cientificamente defensável, com limitações
+explicitadas e um caminho de evolução claramente delimitado pela evidência acumulada.
 
 ---
 
-*Documento gerado a partir do estado do código em junho/2026. Projeto estritamente educacional
-e experimental; não constitui recomendação de investimento.*
+*Documento atualizado a partir do estado do código em julho/2026. Projeto estritamente
+educacional e experimental; não constitui recomendação de investimento.*

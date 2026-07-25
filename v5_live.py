@@ -105,14 +105,16 @@ def fetch_klines(symbol: str, total: int = KLINES_NEED) -> pd.DataFrame:
 
 
 def build_market(symbols):
-    """Baixa klines de todos os ativos + BTC e calcula features."""
+    """Baixa klines de todos os ativos + BTC e calcula features.
+    Usa o gerador definido em _FEAT_FN (v5=18 features, v6=26)."""
+    feat_fn = globals().get("_FEAT_FN", _add_features)
     btc_df = fetch_klines(BTC)
     market = {}
     for s in symbols:
         adf = btc_df if s == BTC else fetch_klines(s)
         common = adf.index.intersection(btc_df.index)
         adf_c, btc_c = adf.loc[common], btc_df.loc[common]
-        feat_df = _add_features(adf_c, btc_c).dropna()
+        feat_df = feat_fn(adf_c, btc_c).dropna()
         if len(feat_df) < WINDOW_SIZE + 2:
             log(f"  [{s}] features insuficientes ({len(feat_df)}) — pulando ciclo")
             continue
@@ -228,9 +230,10 @@ def check_exits(state, market):
             f"({hold_min}min) | P&L ${pnl:+.2f} | capital ${state['cap']:,.2f}")
 
 
-def check_entries(state, market, model, device):
+def check_entries(state, market, model, device, universo=None):
     """Procura UMA nova entrada por ciclo (a mais forte), como no backtest."""
-    available = [s for s in market if s not in state["positions"] and s in ASSETS]
+    universo = universo or ASSETS
+    available = [s for s in market if s not in state["positions"] and s in universo]
     if not available:
         return
 
@@ -295,15 +298,16 @@ def check_entries(state, market, model, device):
         f"margem ${margin:,.2f} | SL {sl:.4f} TP {tp:.4f}")
 
 
-def cycle(state, model, device):
-    symbols = set(ASSETS) | {BTC} | set(state["positions"].keys())
+def cycle(state, model, device, universo=None):
+    universo = universo or ASSETS
+    symbols = set(universo) | {BTC} | set(state["positions"].keys())
     market = build_market(sorted(symbols))
     if not market:
         log("  Sem dados de mercado neste ciclo.")
         return
 
     check_exits(state, market)
-    check_entries(state, market, model, device)
+    check_entries(state, market, model, device, universo)
     save_state(state)
 
     pos_str = ", ".join(
@@ -322,26 +326,49 @@ def main():
                     help="Minutos entre ciclos (padrao 15)")
     ap.add_argument("--gpu", action="store_true",
                     help="Usa GPU (padrao CPU — nao disputa com treinos)")
+    ap.add_argument("--featset", choices=["v5", "v6"], default="v5",
+                    help="Conjunto de features (deve casar com o modelo)")
+    ap.add_argument("--assets", default=None,
+                    help="Universo de ativos separado por virgula. "
+                         "'ALL' usa todos os parquets de data/. Padrao: os 6 do treino")
     args = ap.parse_args()
 
     device = "cuda" if (args.gpu and torch.cuda.is_available()) else "cpu"
 
+    # Gerador de features compativel com o modelo
+    if args.featset == "v6":
+        from v6_data_prep import add_features_v6 as feat_fn
+    else:
+        feat_fn = _add_features
+    globals()["_FEAT_FN"] = feat_fn
+
+    universo = None
+    if args.assets:
+        if args.assets.upper() == "ALL":
+            import glob as _glob
+            universo = sorted(os.path.basename(p).replace("_1m.parquet", "")
+                              for p in _glob.glob("data/*_1m.parquet"))
+        else:
+            universo = [s.strip().upper() for s in args.assets.split(",")]
+
     state = load_state(reset=args.reset)
     log("=" * 64)
-    log(f"V5.9 LIVE PAPER | modelo {args.model} | device {device}")
+    log(f"LIVE PAPER | modelo {args.model} | featset {args.featset} | device {device}")
+    log(f"Universo: {len(universo) if universo else len(ASSETS)} ativos"
+        + (f" ({', '.join(universo)})" if universo else ""))
     log(f"Capital ${state['cap']:,.2f} | {len(state['positions'])} posicao(oes) aberta(s)")
     log("=" * 64)
 
     # Descobre n_features com um fetch leve do BTC
     probe = fetch_klines(BTC, total=KLINES_NEED)
-    probe_feats = _add_features(probe, probe).dropna()
+    probe_feats = feat_fn(probe, probe).dropna()
     n_features = probe_feats.shape[1]
     model = load_model(args.model, n_features, device)
     log(f"Modelo carregado ({n_features} features)")
 
     while True:
         try:
-            cycle(state, model, device)
+            cycle(state, model, device, universo)
         except KeyboardInterrupt:
             log("Interrompido pelo usuario. Estado salvo.")
             break

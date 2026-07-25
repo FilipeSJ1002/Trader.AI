@@ -18,31 +18,27 @@ data_v*/
 *.pth
 *.pt
 *.ckpt
+*.meta.json
 
-# Estado de runtime e logs (não versionar)
+# ─────────────────────────────────────────────────────────────────────────
+# TODA saída gerada em runtime mora em relatorios/ — logs, relatórios de
+# backtest, resultados de experimento. É descartável e 100% regenerável
+# (o código que a produz está versionado). Uma pasta, uma regra.
+# ─────────────────────────────────────────────────────────────────────────
+relatorios/
+
+# Estado operacional do bot (histórico real — não é código, não versionar)
 trading_state.db
-train_v5_log.txt
-*.log
-
-# Arquivos temporários de sessão e backtest
-_LEIA_PRIMEIRO.md
-backtest_v5*.txt
-requirements_utf8.txt
-RELATORIO_PROJETO.txt
-pip_temp/
-
-# Saidas geradas pelo pipeline de experimentos (v5_run_experiments.py)
-v5_bt_*.txt
-v5_experiments*
-
-# Saidas do walk-forward e do live paper trading (geradas em runtime)
-v5_walkforward_done.txt
 v5_live_state.json
 v5_live_trades.csv
 v5_train.pause
-*.meta.json
 
-# Relatorios HTML gerados pelos backtests (pesados — distorcem as estatisticas
+# Documentos de trabalho e relatórios HTML (pesados; distorcem a estatística
 # de linguagem do GitHub)
+_LEIA_PRIMEIRO.md
+requirements_utf8.txt
+RELATORIO_PROJETO.txt
+pip_temp/
 backtest_report.html
 *.html
+*.log

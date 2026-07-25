@@ -105,10 +105,81 @@ coerente com o objetivo central do projeto de operar com segurança em mercados 
 
 Avaliada pela metodologia **walk-forward** (sem vazamento de dados futuros), a V5 demonstrou sua
 capacidade de **preservação de capital**: em um período de teste de mercado de baixa, obteve
-retorno de **+1,8%** enquanto a estratégia passiva de *buy-and-hold* do Bitcoin recuou **−15,9%** —
-uma vantagem de aproximadamente **18 pontos percentuais** —, sem registrar uma única liquidação. A
+retorno de **+2,0%** enquanto a estratégia passiva de *buy-and-hold* do Bitcoin recuou **−26,8%** —
+uma vantagem de aproximadamente **29 pontos percentuais** —, sem registrar uma única liquidação. A
 principal limitação remanescente é a **frequência ainda baixa de sinais de altíssima convicção**, o
-que mantém os retornos modestos e constitui a próxima fronteira de aprimoramento do sistema.
+que mantém os retornos modestos e motivou a investigação sistemática conduzida na versão seguinte.
+
+## Versão 6 — Investigação dos Limites e Validação por Ablação
+
+Se as versões anteriores foram guiadas pela busca de uma arquitetura que
+funcionasse, a sexta volta-se para uma questão diferente e mais madura:
+**quanto cada componente do sistema realmente contribui, e onde estão seus
+limites?** Trata-se de uma etapa predominantemente investigativa, na qual cinco
+hipóteses de aprimoramento foram formuladas e submetidas a teste sistemático.
+
+Duas decisões metodológicas sustentam esta etapa. A primeira foi a adoção de um
+**conjunto de validação virgem**: dados de junho e julho de 2026 obtidos
+*posteriormente* ao congelamento de toda a arquitetura, parâmetros e limiares.
+Nenhuma decisão de projeto pôde ser influenciada por eles, o que os torna a
+aproximação mais fiel de operação real sem exposição de capital. A segunda foi a
+definição de **critérios de promoção anteriores à observação dos resultados**,
+impedindo que a régua fosse ajustada em favor da conclusão desejada.
+
+O experimento central da etapa foi um **estudo de ablação**: executar a
+estratégia de forma idêntica, porém com o filtro neural neutralizado, isolando
+assim sua contribuição.
+
+| Período | Com rede neural | Sem rede neural | Contribuição |
+|---|---|---|---|
+| Validação (jul–dez/2025) | −2,0% | −4,1% | +2,1 p.p. |
+| Teste (jan–jul/2026) | **+2,0%** | **−6,0%** | **+8,0 p.p.** |
+| Holdout virgem (jun–jul/2026) | +0,2% | −0,6% | +0,8 p.p. |
+
+O resultado sustenta empiricamente a tese central do trabalho: **sem a rede
+neural o sistema é deficitário em todos os períodos analisados**. Ela descarta
+aproximadamente 75% dos sinais gerados pelo componente determinístico e eleva a
+taxa de acerto de 36,6% para 41,2%.
+
+Esse achado ganha relevância adicional quando confrontado com uma medição
+anterior. Ao avaliar isoladamente a capacidade preditiva da rede — sua taxa de
+acerto direcional em janelas arbitrárias do mercado — obteve-se valor próximo de
+0,50, equivalente ao acaso, o que sugeriria que o componente era dispensável. A
+ablação demonstrou o oposto. A explicação reside na natureza da tarefa: a rede
+**não** prevê a direção do mercado a partir do zero; ela **discrimina entre
+candidatos previamente filtrados pelos indicadores técnicos**. São problemas
+distintos, e apenas o segundo corresponde ao seu uso efetivo. Daí a lição
+metodológica registrada: métricas devem ser aferidas no contexto real de
+aplicação, e a ablação constitui o instrumento adequado para atribuir valor a um
+componente.
+
+Das demais hipóteses, três foram refutadas. A **ampliação do universo de ativos**
+(de seis para onze) degradou o desempenho em todos os períodos, apesar do maior
+número de oportunidades. Os **stops adaptativos por volatilidade** — motivados
+pela observação de que os ativos mais voláteis concentravam as perdas — não
+superaram o stop percentual fixo em nenhuma calibração testada; demonstrou-se,
+inclusive, que as mesmas operações eram encerradas independentemente da largura
+do stop, descartando a hipótese de acionamento por ruído. O **enriquecimento do
+conjunto de atributos** (de 18 para 26 variáveis, incluindo Bandas de Bollinger,
+regime de mercado e sazonalidade) não superou o modelo anterior em erro de
+validação.
+
+A quinta hipótese produziu o achado transversal mais relevante: **a alavancagem
+comporta-se como multiplicador de regime, não de competência preditiva**. Em
+mercado lateral, operar sem alavancagem alguma superou a configuração de produção
+em 1,2 ponto percentual — resultado com explicação econômica direta, uma vez que
+os custos de transação escalam com o valor nocional. Com margem preditiva
+modesta, a alavancagem não melhora o valor esperado; amplifica o custo de fricção
+e a variância. Uma variante condicionada à força da tendência apresentou soma
+superior e variância substancialmente menor, embora com desempenho inferior em
+mercado de forte tendência — configurando um compromisso entre retorno e
+consistência, e não uma melhoria absoluta.
+
+A V6, portanto, não elevou o retorno do sistema. Sua contribuição é de outra
+natureza: **delimitou com precisão o que funciona, o que não funciona e por quê**,
+eliminando quatro caminhos improdutivos e estabelecendo que o gargalo reside na
+capacidade discriminativa do modelo — não em parâmetros de execução, universo de
+ativos ou cronograma de retreinamento.
 
 ---
 
@@ -117,14 +188,29 @@ que mantém os retornos modestos e constitui a próxima fronteira de aprimoramen
 | Versão | Abordagem | Ponto Forte | Limitação | Resultado |
 |--------|-----------|-------------|-----------|-----------|
 | **V1** | Regras determinísticas (RSI, MACD, Bollinger) | Transparência; alta rentabilidade no *bull* | *Stop loss* ineficaz; dependente de regime | **+16% real** (1º mês), seguido de perdas no *bear* |
-| **V2** | Gestão de risco (ATR, *trailing stop*) | Segurança; fim das perdas catastróficas | Conservadora demais | Lucro baixo [confirmar] |
-| **V3** | Equilíbrio (EMA 200, R:R 1:6, *micro-stop*) | Filtro de tendência; R:R ambicioso | *Stop* apertado → saídas prematuras | Prejuízo [confirmar] |
+| **V2** | Gestão de risco (ATR, *trailing stop*) | Segurança; fim das perdas catastróficas | Conservadora demais | Retorno marginal |
+| **V3** | Equilíbrio (EMA 200, R:R 1:6, *micro-stop*) | Filtro de tendência; R:R ambicioso | *Stop* apertado → saídas prematuras | Resultado negativo (*drawdown*) |
 | **V4** | ML de árvores (*Random Forest* → *LightGBM*) | Infraestrutura de ML; auto-retreino | Árvores não capturam tempo; IA isolada | Lucros baixos |
-| **V5** | Rede neural híbrida (BiLSTM+Attention + regras) | IA temporal + regras; bidirecional; *walk-forward* | Poucos sinais de alta convicção | **+1,8%** vs BTC **−15,9%** (~+18 p.p.), zero liquidações |
+| **V5** | Rede neural híbrida (BiLSTM+Attention + regras) | IA temporal + regras; bidirecional; *walk-forward* | Poucos sinais de alta convicção | **+2,0%** vs BTC **−26,8%** (~+29 p.p.), zero liquidações |
+| **V6** | Investigação de limites e validação por ablação | Prova empírica da contribuição da IA (**+8,0 p.p.**); *holdout* virgem; 4 hipóteses refutadas | Não elevou o retorno; gargalo permanece na capacidade discriminativa | Confirmação da arquitetura; delimitação precisa dos limites |
+
+### Resultados consolidados da configuração vigente
+
+| Período | Trader.AI | *Buy-and-hold* BTC | Vantagem |
+|---|---|---|---|
+| Teste jan–jul/2026 (*bear market*) | **+2,0%** | −26,8% | +28,8 p.p. |
+| *Holdout* virgem jun–jul/2026 | **+0,2%** | −13,0% | +13,2 p.p. |
+| Validação jul–dez/2025 (lateral) | −2,0% | −18,2% | +16,2 p.p. |
+
+A taxa de acerto manteve-se **idêntica (41,2%)** no período de teste e no *holdout*
+virgem, indicando estabilidade do comportamento e não calibração fortuita.
+Nenhuma liquidação foi registrada em qualquer período.
 
 ---
 
 *Observação metodológica: internamente, o histórico de desenvolvimento foi mais granular que a
-divisão em cinco versões aqui apresentada (incluindo iterações intermediárias de estratégias de
-*trend-following* e múltiplas "Fases" de engenharia). A consolidação em V1–V5 foi adotada por
-clareza didática, agrupando as iterações por sua hipótese central predominante.*
+divisão em seis versões aqui apresentada (incluindo iterações intermediárias de estratégias de
+*trend-following* e múltiplas "Fases" de engenharia). A consolidação em V1–V6 foi adotada por
+clareza didática, agrupando as iterações por sua hipótese central predominante. O detalhamento
+completo dos experimentos, com metodologia e resultados negativos, encontra-se em
+`METODOLOGIA_EXPERIMENTAL.md`.*

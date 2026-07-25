@@ -30,6 +30,12 @@ PAIRS_CONFIG = {
     "SOLUSDT":  os.path.join(DATASETS_ROOT, "SOL-USDT_datasets_brutos"),
     "BNBUSDT":  os.path.join(DATASETS_ROOT, "BNB-USDT_datasets_brutos"),
     "AVAXUSDT": os.path.join(DATASETS_ROOT, "AVAX-USDT_datasets_brutos"),
+    # V6: +5 pares liquidos para ampliar o volume de oportunidades
+    "DOGEUSDT": os.path.join(DATASETS_ROOT, "DOGE-USDT_datasets_brutos"),
+    "LINKUSDT": os.path.join(DATASETS_ROOT, "LINK-USDT_datasets_brutos"),
+    "ADAUSDT":  os.path.join(DATASETS_ROOT, "ADA-USDT_datasets_brutos"),
+    "DOTUSDT":  os.path.join(DATASETS_ROOT, "DOT-USDT_datasets_brutos"),
+    "LTCUSDT":  os.path.join(DATASETS_ROOT, "LTC-USDT_datasets_brutos"),
 }
 
 # Data de início disponível no Binance Vision por par
@@ -41,6 +47,12 @@ PAIR_START = {
     "SOLUSDT":  (2020, 9),   # SOL listado em Set/2020
     "BNBUSDT":  (2019, 1),   # BNB desde 2019
     "AVAXUSDT": (2020, 9),   # AVAX listado em Set/2020
+    # V6
+    "DOGEUSDT": (2019, 7),   # DOGE listado em Jul/2019
+    "LINKUSDT": (2019, 1),   # LINK desde Jan/2019
+    "ADAUSDT":  (2019, 1),   # ADA desde 2018 (Vision a partir de 2019)
+    "DOTUSDT":  (2020, 8),   # DOT listado em Ago/2020
+    "LTCUSDT":  (2019, 1),   # LTC desde 2017 (padronizado em 2019)
 }
 
 
