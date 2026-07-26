@@ -79,6 +79,10 @@ Trader.AI/
 ├── v5_backtest.py             # Backtest híbrido: LONG/SHORT, TP/SL intrabar, regime, curvas de alavancagem
 ├── v5_live.py                 # Motor híbrido em tempo real (paper trading)
 │
+│  ── Execução real (Etapa 8) ─────────────────────────────────────────
+├── v6_executor.py             # Ordens na Binance Futures: dry-run, testnet, TP/SL na corretora
+├── v6_ciclo.py                # Ponte estratégia -> execução (importa a lógica do backtest)
+│
 │  ── Ferramentas de análise (V6) ─────────────────────────────────────
 ├── v6_ablacao.py              # Mede a contribuição real da rede neural (com vs sem)
 ├── v6_edge_por_ativo.py       # Edge direcional por ativo
@@ -246,6 +250,65 @@ Estado persistente em `v5_live_state.json` (sobrevive a reinícios) e diário de
 
 ---
 
+##  Execução Real na Binance Futures (Etapa 8)
+
+Traduz as decisões da estratégia em **ordens reais**. Construído com três travas
+de segurança independentes.
+
+### Pré-requisito: chaves da Futures Testnet
+
+A Binance mantém **testnets separadas** para spot e futuros, com contas e chaves
+distintas. Usar chave de spot em endpoint de futuros retorna `APIError -2015`.
+
+```bash
+python v6_executor.py --ajuda-chaves    # passo a passo completo
+```
+
+Resumo: acesse `testnet.binancefuture.com`, entre com GitHub/Google, copie as chaves
+no rodapé (aba "API Key") e adicione ao `.env`:
+
+```
+BINANCE_FUTURES_API_KEY=sua_chave_de_futuros
+BINANCE_FUTURES_SECRET_KEY=sua_secret_de_futuros
+```
+
+As chaves de spot permanecem inalteradas — o bot V4 continua usando-as.
+
+### Travas de segurança
+
+| Trava | Comportamento padrão | Como liberar |
+|---|---|---|
+| **Dry-run** | Registra o que faria; **não envia nada** | `--armar` |
+| **Testnet** | Dinheiro fictício | `--real` (exige confirmação digitada) |
+| **Limites** | Máx. 3 posições, 5x, 60% de exposição | Constantes no código |
+
+### Comandos
+
+```bash
+python v6_executor.py --status              # inspeciona conta e posições
+python v6_executor.py --once                # 1 ciclo em dry-run (nada é enviado)
+python v6_executor.py --once --armar        # 1 ciclo enviando ordens (testnet)
+python v6_executor.py --armar               # loop contínuo (testnet)
+python v6_executor.py --fechar BTCUSDT      # fecha uma posição manualmente
+python v6_executor.py --fechar-tudo         # fecha todas as posições
+```
+
+### Proteção independente do bot
+
+Ao abrir posição, o take profit e o stop loss são registrados como **ordens
+condicionais *reduce-only* na própria corretora**. Se o processo travar, o PC
+desligar ou faltar energia, o capital permanece protegido — a Binance executa a
+saída. Um sistema que depende de estar em execução para respeitar o stop é
+estruturalmente frágil.
+
+### Paridade com o backtest
+
+`v6_ciclo.py` **importa** `v1_scores` e `leverage_for` de `v5_backtest.py` em vez
+de reimplementá-las. A lógica que movimenta capital é, portanto, exatamente a
+mesma que foi validada — não uma cópia sujeita a divergir silenciosamente.
+
+---
+
 ##  Bot V4 em Tempo Real (API + WebSocket)
 
 ```bash
@@ -276,7 +339,7 @@ python teste_saldo.py
 - [x] **Etapa 5:** Rede Neural Direcional (BiLSTM + Attention) e Estratégia Híbrida Bidirecional (LONG/SHORT).
 - [x] **Etapa 6:** Validação *walk-forward* trimestral e motor de *paper trading* em tempo real com dados reais da Binance.
 - [x] **Etapa 7 (V6):** Investigação sistemática dos limites do sistema — ablação da rede neural, calibração de confiança, expansão de universo, stops adaptativos e curvas de alavancagem.
-- [ ] **Etapa 8:** Ponte para execução real — integração da estratégia híbrida ao motor de ordens e operação na Binance Futures (Testnet).
+- [~] **Etapa 8 (em andamento):** Ponte para execução real — `v6_executor.py` e `v6_ciclo.py` implementados e validados; aguarda credenciais da Futures Testnet para o primeiro ciclo com ordens.
 
 ###  Achados da Etapa 6 (walk-forward)
 

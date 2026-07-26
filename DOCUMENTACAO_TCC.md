@@ -435,6 +435,73 @@ ordens **simuladas** (*paper trading*) — a validação final antes de qualquer
 
 ---
 
+## 13.1 Arquitetura de Execução Real (Binance Futures)
+
+Arquivos: `v6_executor.py` (interface com a corretora) e `v6_ciclo.py` (ponte entre
+estratégia e execução).
+
+### Separação de responsabilidades
+
+| Módulo | Responsabilidade |
+|---|---|
+| `v5_backtest.py` | Define a estratégia — funções de decisão |
+| `v6_ciclo.py` | **Importa** essas funções e as aplica a dados ao vivo |
+| `v6_executor.py` | Traduz decisões em ordens; não conhece a estratégia |
+
+Decisão de projeto relevante: `v6_ciclo.py` **importa** `v1_scores` e `leverage_for`
+de `v5_backtest.py`, em vez de reimplementá-las. A lógica que movimenta capital é,
+portanto, o mesmo objeto de código validado nos backtests. Reimplementação seria a
+via mais provável para divergência silenciosa entre o sistema simulado e o real.
+
+### Modelo de segurança em três camadas
+
+| Camada | Estado padrão | Liberação |
+|---|---|---|
+| **Modo de simulação** (*dry-run*) | Registra ordens sem enviá-las | Flag explícita `--armar` |
+| **Ambiente** | Testnet (capital fictício) | Flag `--real` + confirmação textual |
+| **Limites operacionais** | 3 posições, alavancagem 5x, exposição 60% | Constantes no código |
+
+As camadas são independentes: operar com dinheiro real exige três ações
+deliberadas e distintas.
+
+### Proteção residente na corretora
+
+Ao abrir posição, o sistema registra *take profit* e *stop loss* como **ordens
+condicionais *reduce-only* na própria Binance**. A consequência é relevante para
+confiabilidade: se o processo for interrompido — falha de software, queda de
+energia, perda de conectividade —, a proteção do capital permanece ativa, pois
+a execução da saída passa a ser responsabilidade da corretora.
+
+A alternativa (manter os stops apenas na lógica do bot) cria dependência entre a
+integridade do capital e a disponibilidade contínua do processo, o que constitui
+fragilidade estrutural em sistemas de negociação automatizada.
+
+### Conformidade com as regras da corretora
+
+Cada par negociado possui restrições próprias de granularidade e valor mínimo,
+obtidas dinamicamente via `futures_exchange_info`:
+
+| Par | Incremento de quantidade | Notional mínimo |
+|---|---|---|
+| BTCUSDT | 0,0001 | US$ 50 |
+| ETHUSDT | 0,001 | US$ 20 |
+| AVAXUSDT | 1 (apenas inteiros) | US$ 5 |
+| XRPUSDT | 0,1 | US$ 5 |
+
+O executor arredonda quantidades para baixo respeitando o incremento e verifica o
+notional resultante **após** o arredondamento — verificação necessária, pois o
+arredondamento pode reduzir a ordem abaixo do mínimo exigido.
+
+### Estado e reconciliação
+
+A fonte de verdade sobre posições abertas é a **corretora**, consultada a cada
+ciclo via `futures_position_information`. O arquivo de estado local registra
+metadados complementares (instante de abertura, confiança do modelo na decisão),
+mas não é tratado como autoridade — o que permite reinício do processo sem
+inconsistência de estado.
+
+---
+
 ## 14. Robustez Operacional
 
 Como o treino leva ~12–16h por modelo numa GPU modesta (GTX 1650, 4 GB, compartilhada com o
@@ -488,14 +555,17 @@ uso normal do PC), foram implementados mecanismos de resiliência:
    confiança declarada pelo modelo, o que limita o uso da alavancagem proporcional.
 7. **Retorno modesto:** o sistema preserva capital e supera consistentemente o BTC, mas não
    atinge a meta de lucro diário expressivo.
-8. **A estratégia híbrida ainda não está integrada ao motor de execução.** O bot que emite
-   ordens (`main.py`) opera com a estratégia de *trend-following* da V4.
+8. **A execução real ainda não foi exercitada.** A ponte foi implementada (seção 13.1) e
+   validada nos componentes que independem de autenticação, mas nenhuma ordem foi
+   efetivamente emitida — pendente de credenciais da Futures Testnet. O bot legado
+   (`main.py`) segue operando com a estratégia de *trend-following* da V4.
 
-**Trabalhos futuros (Etapa 8):**
-- **Ponte para execução real:** integrar a estratégia híbrida validada ao motor de ordens,
-  com suporte a Binance Futures (posições vendidas, ordens TP/SL nativas, margem isolada).
+**Trabalhos futuros (Etapa 8, em andamento):**
+- **Primeiro ciclo com ordens reais** na Testnet, iniciando em modo de simulação para
+  auditoria das decisões antes de qualquer emissão.
 - **Validação em Testnet** por período prolongado, comparando o desempenho observado com o
-  previsto pelo backtest.
+  previsto pelo backtest — em particular quanto a *slippage* e latência, não modelados na
+  simulação.
 - **Fortalecer a capacidade discriminativa** do modelo — identificada como o gargalo real
   após a série de experimentos da V6.
 - **Monitoramento de divergência** entre desempenho ao vivo e esperado, como gatilho para

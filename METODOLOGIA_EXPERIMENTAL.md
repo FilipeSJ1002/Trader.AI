@@ -323,6 +323,32 @@ de risco, não de desempenho absoluto.
 
 ---
 
+## 4.1 Do experimento à execução — princípios adotados
+
+A transição de um sistema validado em simulação para operação real introduz
+riscos que a metodologia experimental não cobre. Três princípios foram adotados
+na construção da ponte de execução (`v6_executor.py`, `v6_ciclo.py`):
+
+**1. Importar a estratégia, jamais reimplementá-la.** O módulo de execução importa
+as funções de decisão diretamente do backtest. Verificação explícita confirma que
+se trata do mesmo objeto em memória. Uma reimplementação — ainda que fiel na
+origem — tende a divergir ao longo do tempo, e a divergência entre o sistema
+simulado e o operante é silenciosa: manifesta-se apenas como prejuízo.
+
+**2. Falha segura por padrão.** O sistema opera em modo de simulação salvo
+instrução explícita em contrário, em ambiente de teste salvo instrução explícita
+em contrário, e sob limites operacionais verificados a cada ordem. Operar com
+capital real exige três ações deliberadas e independentes.
+
+**3. A proteção não pode depender da disponibilidade do processo.** Ordens de
+*stop loss* e *take profit* são registradas na corretora no momento da abertura da
+posição. Assim, interrupções do processo — falha de software, queda de energia,
+perda de conectividade — não expõem o capital. A alternativa, manter os limites
+apenas na lógica do programa, acopla a integridade do capital à disponibilidade
+contínua da execução.
+
+---
+
 ## 5. Limitações reconhecidas
 
 - **Amostras pequenas em alguns recortes.** O holdout virgem contém 17 operações;
