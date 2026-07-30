@@ -1,0 +1,26 @@
+[Unit]
+Description=Trader.AI - executor Binance Futures (TESTNET)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/trader-ai
+EnvironmentFile=/home/ubuntu/trader-ai/.env
+Environment=PYTHONUNBUFFERED=1
+
+# TESTNET: sem a flag --real, o executor NUNCA toca em dinheiro de verdade.
+# Trocar isto exige edicao consciente deste arquivo + systemctl daemon-reload.
+ExecStart=/home/ubuntu/trader-ai/venv/bin/python v6_executor.py --armar --intervalo 15
+
+# Reinicia sozinho se cair (queda de rede, erro nao tratado, reboot da maquina)
+Restart=always
+RestartSec=30
+
+# Log vai para o journal do systemd (journalctl -u trader-executor -f)
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

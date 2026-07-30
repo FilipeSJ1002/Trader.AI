@@ -1,0 +1,19 @@
+# Dependencias MINIMAS para rodar o executor num servidor (sem GPU, sem treino).
+# O requirements.txt principal NAO inclui o torch (o venv local foi montado a
+# mao com a build CUDA) — por isso este arquivo existe.
+#
+# Instalacao no servidor (Ubuntu):
+#   python3 -m venv venv
+#   ./venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   ./venv/bin/pip install -r requirements-server.txt
+#
+# O torch fica FORA desta lista de proposito: precisa do index da build CPU,
+# senao o pip baixa ~2,5 GB de dependencias CUDA que o servidor nao usa.
+
+numpy==2.2.6
+pandas==3.0.1
+pandas-ta==0.4.71b0
+requests==2.32.5
+python_binance==1.0.35
+python-dotenv==1.2.2
+scipy==1.17.1
