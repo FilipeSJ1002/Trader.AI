@@ -490,7 +490,8 @@ async def rebalance_portfolio(target_weights: dict, current_prices: dict):
             continue
         try:
             base = get_base_asset(symbol)
-            bal  = float(client.get_asset_balance(asset=base)["free"])
+            saldo = client.get_asset_balance(asset=base) or {}
+            bal  = float(saldo.get("free", 0.0))
             full_exit = target_weights.get(symbol, 0.0) <= 0
             sell_qty  = bal if full_exit else min(bal, abs(dv) / price)
             sell_qty  = _arredondar_fracao(sell_qty, _decimais_para(symbol))

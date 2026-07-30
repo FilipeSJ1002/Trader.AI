@@ -35,10 +35,15 @@ import time
 import math
 import argparse
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:                       # so para o editor/linter — nao roda
+    from binance.client import Client
 
 for _s in (sys.stdout, sys.stderr):
-    if hasattr(_s, "reconfigure"):
-        _s.reconfigure(encoding="utf-8", errors="replace")
+    _reconfigure = getattr(_s, "reconfigure", None)
+    if _reconfigure is not None:
+        _reconfigure(encoding="utf-8", errors="replace")
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -110,8 +115,19 @@ class FuturesExecutor:
     def __init__(self, testnet=True, dry_run=True):
         self.testnet = testnet
         self.dry_run = dry_run
-        self.client = None
+        self.client: Optional["Client"] = None
         self.filtros = {}      # symbol -> {stepSize, tickSize, minNotional}
+
+    @property
+    def api(self) -> "Client":
+        """
+        Cliente da Binance ja conectado. Usar esta propriedade (em vez de
+        self.client) garante erro claro se alguem chamar um metodo antes de
+        conectar() — em vez de um AttributeError obscuro em 'None'.
+        """
+        if self.client is None:
+            raise RuntimeError("Executor nao conectado — chame conectar() antes.")
+        return self.client
 
     # ── Conexao ─────────────────────────────────────────────────────────────
     def conectar(self):
@@ -136,14 +152,33 @@ class FuturesExecutor:
                 "crie chaves de FUTUROS — ver instrucoes com --ajuda-chaves")
 
         self.client = Client(api_key, secret, testnet=self.testnet)
+
+        # A Binance rejeita requisicoes cujo timestamp diverge do servidor dela
+        # (APIError -1021). O relogio do Windows costuma ficar ~1s adiantado.
+        # Medimos o desvio e compensamos, alem de ampliar a janela aceita.
+        self._sincronizar_relogio()
+
         ambiente = "TESTNET (dinheiro ficticio)" if self.testnet else "PRODUCAO (dinheiro real)"
         modo = "DRY-RUN (nada e enviado)" if self.dry_run else "ARMADO (envia ordens)"
         log(f"Conectado — {ambiente} | {modo}")
         self._carregar_filtros()
 
+    def _sincronizar_relogio(self):
+        """Compensa a diferenca entre o relogio local e o da Binance."""
+        try:
+            servidor = self.api.futures_time()["serverTime"]
+            local = int(time.time() * 1000)
+            offset = servidor - local
+            self.api.timestamp_offset = offset
+            # Janela de tolerancia maior (padrao 5000ms) para variacoes de latencia
+            self.api.REQUEST_TIMEOUT = 20
+            log(f"Relogio sincronizado: desvio de {offset}ms compensado")
+        except Exception as e:
+            log(f"[AVISO] nao foi possivel sincronizar o relogio: {e}")
+
     def _carregar_filtros(self):
         """Cada simbolo tem regras de precisao; violar = ordem rejeitada."""
-        info = self.client.futures_exchange_info()
+        info = self.api.futures_exchange_info()
         for s in info["symbols"]:
             f = {x["filterType"]: x for x in s["filters"]}
             self.filtros[s["symbol"]] = {
@@ -166,7 +201,7 @@ class FuturesExecutor:
 
     # ── Leitura de estado ───────────────────────────────────────────────────
     def saldo_usdt(self):
-        for a in self.client.futures_account_balance():
+        for a in self.api.futures_account_balance():
             if a["asset"] == "USDT":
                 return float(a["balance"])
         return 0.0
@@ -174,7 +209,7 @@ class FuturesExecutor:
     def posicoes_abertas(self):
         """Le da CORRETORA — fonte da verdade, nao o arquivo local."""
         out = {}
-        for p in self.client.futures_position_information():
+        for p in self.api.futures_position_information():
             amt = float(p["positionAmt"])
             if abs(amt) > 0:
                 out[p["symbol"]] = {
@@ -188,8 +223,8 @@ class FuturesExecutor:
 
     def ordens_abertas(self, symbol=None):
         if symbol:
-            return self.client.futures_get_open_orders(symbol=symbol)
-        return self.client.futures_get_open_orders()
+            return self.api.futures_get_open_orders(symbol=symbol)
+        return self.api.futures_get_open_orders()
 
     # ── Escrita (protegida pelo dry_run) ────────────────────────────────────
     def _enviar(self, descricao, fn, **kwargs):
@@ -247,18 +282,18 @@ class FuturesExecutor:
         # 1. Configura margem isolada e alavancagem
         if not self.dry_run:
             try:
-                self.client.futures_change_margin_type(symbol=symbol, marginType="ISOLATED")
+                self.api.futures_change_margin_type(symbol=symbol, marginType="ISOLATED")
             except Exception:
                 pass  # ja esta isolada
             try:
-                self.client.futures_change_leverage(symbol=symbol, leverage=alavancagem)
+                self.api.futures_change_leverage(symbol=symbol, leverage=alavancagem)
             except Exception as e:
                 log(f"  [AVISO] nao ajustou alavancagem de {symbol}: {e}")
 
         # 2. Entrada a mercado
         entrada = self._enviar(
             f"entrada {lado} {symbol}",
-            self.client.futures_create_order,
+            self.api.futures_create_order,
             symbol=symbol, side=lado, type="MARKET", quantity=qtd,
         )
         if entrada is None:
@@ -267,7 +302,7 @@ class FuturesExecutor:
         # 3. Stop loss (reduce-only, fica na corretora)
         self._enviar(
             f"STOP LOSS {symbol} @ {sl_price}",
-            self.client.futures_create_order,
+            self.api.futures_create_order,
             symbol=symbol, side=lado_saida, type="STOP_MARKET",
             stopPrice=sl_price, closePosition=True, timeInForce="GTE_GTC",
         )
@@ -275,7 +310,7 @@ class FuturesExecutor:
         # 4. Take profit (reduce-only, fica na corretora)
         self._enviar(
             f"TAKE PROFIT {symbol} @ {tp_price}",
-            self.client.futures_create_order,
+            self.api.futures_create_order,
             symbol=symbol, side=lado_saida, type="TAKE_PROFIT_MARKET",
             stopPrice=tp_price, closePosition=True, timeInForce="GTE_GTC",
         )
@@ -294,7 +329,7 @@ class FuturesExecutor:
         log(f"  FECHAR {pos['direcao']} {symbol}: qtd={qtd} | motivo: {motivo}")
         r = self._enviar(
             f"fechamento {symbol}",
-            self.client.futures_create_order,
+            self.api.futures_create_order,
             symbol=symbol, side=lado, type="MARKET", quantity=qtd, reduceOnly=True,
         )
         self.cancelar_ordens(symbol)
@@ -308,7 +343,7 @@ class FuturesExecutor:
             log(f"  [DRY-RUN] cancelaria {len(abertas)} ordem(ns) de {symbol}")
             return
         try:
-            self.client.futures_cancel_all_open_orders(symbol=symbol)
+            self.api.futures_cancel_all_open_orders(symbol=symbol)
             log(f"  [ENVIADO] canceladas {len(abertas)} ordem(ns) de {symbol}")
         except Exception as e:
             log(f"  [ERRO] cancelamento de {symbol}: {e}")

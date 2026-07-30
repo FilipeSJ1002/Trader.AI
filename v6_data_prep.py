@@ -30,8 +30,13 @@ import os
 import gc
 import numpy as np
 import pandas as pd
-import pandas_ta as ta
+import pandas_ta as _pandas_ta
 from datetime import datetime
+from typing import Any
+
+# Ver nota em v5_data_prep.py: alias tipado para o editor nao confundir os
+# submodulos do pandas-ta com as funcoes de mesmo nome.
+ta: Any = _pandas_ta
 
 from v5_data_prep import (ASSETS, BTC, WINDOW_SIZE, HORIZON_H, SUBSAMPLE,
                           TRAIN_END, VAL_END, CLASS_NAMES,

@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 import pandas_ta as ta
 import lightgbm as lgb
+from typing import cast
 from sklearn.metrics import (classification_report, accuracy_score,
                              precision_score, recall_score, roc_auc_score)
 from train_model import FEATURES, ALL_PAIRS, build_features
@@ -172,7 +173,7 @@ def build_exit_features(df: pd.DataFrame) -> pd.DataFrame:
         if col not in df.columns:
             df[col] = 0.0
 
-    return df[EXIT_FEATURES + ['target_exit']].dropna()
+    return cast(pd.DataFrame, df[EXIT_FEATURES + ['target_exit']].dropna())
 
 
 def walk_forward_exit(df_model: pd.DataFrame, n_folds: int = 4) -> dict:
@@ -201,7 +202,7 @@ def walk_forward_exit(df_model: pd.DataFrame, n_folds: int = 4) -> dict:
                 eval_set=[(X_test, y_test)],
                 callbacks=[lgb.log_evaluation(period=-1)])
 
-        proba = clf.predict_proba(X_test)[:, 1]
+        proba = np.asarray(clf.predict_proba(X_test))[:, 1]
         preds = (proba >= 0.50).astype(int)
 
         p = precision_score(y_test, preds, zero_division=0)
@@ -298,7 +299,7 @@ def train_exit_model(pairs: list = None, candles_per_pair: int = CANDLES_PER_PAI
 
     # Avaliacao final
     print("\n[EXIT] --- Avaliacao Final (ultimos 10%) ---")
-    proba_val = final_model.predict_proba(X_val)[:, 1]
+    proba_val = np.asarray(final_model.predict_proba(X_val))[:, 1]
     preds_val = (proba_val >= 0.50).astype(int)
 
     acc  = accuracy_score(y_val, preds_val)

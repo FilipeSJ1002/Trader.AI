@@ -3,6 +3,7 @@ import asyncio
 import requests
 import pandas as pd
 from datetime import datetime
+from typing import cast
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
@@ -43,7 +44,7 @@ def _carregar_diario(symbol: str) -> pd.Series:
         df = pd.DataFrame(resp.json(), columns=cols)
         df['date'] = pd.to_datetime(df['t'], unit='ms')
         df.set_index('date', inplace=True)
-        series = df['c'].astype(float)
+        series = cast(pd.Series, df['c'].astype(float))
         print(f"  Diario {symbol}: {len(series)} dias (Binance real)")
         return series
     except Exception as e:

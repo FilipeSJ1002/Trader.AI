@@ -1,6 +1,7 @@
 import pandas as pd
 import os
 import glob
+from typing import cast
 
 CAMINHOS_PASTAS = {
     "BTCUSDT":  r"C:\Users\filip\Downloads\datasets_brutos\BTC-USDT_datasets_brutos",
@@ -41,7 +42,8 @@ def processar_dados():
                 df = df.iloc[:, :6]
                 df.columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
                 
-                col_numerica = pd.to_numeric(df['timestamp'], errors='coerce')
+                col_numerica = cast(pd.Series,
+                                    pd.to_numeric(df['timestamp'], errors='coerce'))
                 mask_num = col_numerica.notna()
                 
                 df['date'] = pd.NaT

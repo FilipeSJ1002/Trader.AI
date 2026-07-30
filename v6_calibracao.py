@@ -97,7 +97,7 @@ def main():
 
     for sym in ASSETS:
         X, y = carrega(a.split, sym, a.data, a.y_dir)
-        if X is None:
+        if X is None or y is None:
             continue
         n = len(X)
         idx = np.arange(n)

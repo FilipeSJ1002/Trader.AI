@@ -31,6 +31,7 @@ relatorios/
 trading_state.db
 v5_live_state.json
 v5_live_trades.csv
+v6_executor_state.json
 v5_train.pause
 
 # Documentos de trabalho e relatórios HTML (pesados; distorcem a estatística

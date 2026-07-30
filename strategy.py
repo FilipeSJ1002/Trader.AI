@@ -141,6 +141,10 @@ class TechnicalAnalysis:
         rsi            = last_candle[rsi_col]
         close_price    = last_candle['close']
         atr_value      = last_candle[atr_col]
+        # ATR relativo ao preco: o filtro de baixa volatilidade usa percentual,
+        # nao valor absoluto (sem isto, o filtro abaixo dava NameError e caia
+        # no except, desligando silenciosamente a camada de ML)
+        atr_pct        = float(atr_value) / float(close_price) if close_price else 0.0
         bb_lower       = last_candle[bb_lower_col]
         bb_upper       = last_candle[bb_upper_col]
         macd_hist      = last_candle[macd_hist_col]

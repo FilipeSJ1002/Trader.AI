@@ -17,8 +17,14 @@ import os
 import gc
 import numpy as np
 import pandas as pd
-import pandas_ta as ta
+import pandas_ta as _pandas_ta
 from datetime import datetime
+from typing import Any, cast
+
+# O pandas-ta 0.4.71b0 expoe cada indicador como submodulo E como funcao de
+# mesmo nome (ta.rsi). O editor resolve para o submodulo e acusa "Module is not
+# callable" — falso positivo. O alias tipado silencia sem mudar nada em runtime.
+ta: Any = _pandas_ta
 
 # ── Parametros ────────────────────────────────────────────────────────────────
 WINDOW_SIZE = 120    # candles de historia por amostra (2h em 1-min) — era 60
@@ -49,7 +55,7 @@ def _load_parquet(symbol: str) -> pd.DataFrame:
     if "date" in df.columns:
         df.set_index("date", inplace=True)
     df.index = pd.to_datetime(df.index)
-    df = df[["open", "high", "low", "close", "volume"]].astype(float)
+    df = cast(pd.DataFrame, df[["open", "high", "low", "close", "volume"]].astype(float))
     df.sort_index(inplace=True)
     return df
 

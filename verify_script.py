@@ -1,8 +1,7 @@
 import pandas as pd
 from mock_data import generate_mock_data
 from strategy import TechnicalAnalysis
-from main import PriceInput, analisar_mercado, startup_event
-import asyncio
+from main import app
 import sys
 
 print("--- [VERIFY] Mock Data ---")
@@ -23,9 +22,12 @@ try:
     print("Decision:", result['decision'])
     print("Analysis Keys:", result['analysis'].keys())
     
+    # Chaves conforme a V4 atual (a V1 devolvia 'macd_signal', que nao existe mais)
     analysis = result['analysis']
-    if 'rsi' not in analysis or 'macd_signal' not in analysis:
-         print("FAIL: Missing analysis keys")
+    faltando = [k for k in ('rsi', 'buy_score', 'sell_score', 'ml_status')
+                if k not in analysis]
+    if faltando:
+         print(f"FAIL: Missing analysis keys: {faltando}")
          sys.exit(1)
          
     print("PASS: Strategy execution")
@@ -35,20 +37,18 @@ except Exception as e:
     traceback.print_exc()
     sys.exit(1)
 
-print("\n--- [VERIFY] API Flow ---")
-async def test_api():
-    await startup_event()
-    input_data = PriceInput(price=66000.00, volume=1500)
-    try:
-        response = await analisar_mercado(input_data)
-        print("API Response:", response)
-        if "decision" not in response:
-            print("FAIL: Invalid API response")
-            sys.exit(1)
-        print("PASS: API Flow")
-    except Exception as e:
-        print(f"FAIL: API Error: {e}")
+# O endpoint POST /analisar (com PriceInput) foi removido quando a API virou
+# somente-leitura na V4. Aqui verificamos as rotas que existem hoje, sem
+# depender de banco nem de rede.
+print("\n--- [VERIFY] API Routes ---")
+def test_api():
+    esperadas = {"/status", "/trend", "/positions", "/performance", "/regime"}
+    rotas = {getattr(r, "path", None) for r in app.routes}
+    faltando = esperadas - rotas
+    if faltando:
+        print(f"FAIL: rotas ausentes na API: {sorted(faltando)}")
         sys.exit(1)
+    print(f"PASS: API Routes ({len(esperadas)} rotas registradas)")
 
 if __name__ == "__main__":
-    asyncio.run(test_api())
+    test_api()

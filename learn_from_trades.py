@@ -15,6 +15,7 @@ Como funciona o ciclo completo:
 """
 import numpy as np
 import pandas as pd
+from typing import cast
 
 import database
 from train_model import FEATURES
@@ -47,7 +48,8 @@ def build_learning_dataset(min_trades: int = MIN_TRADES_TO_LEARN,
         if c not in df.columns:
             df[c] = 0.0
 
-    df = df[FEATURES + ['target']].replace([np.inf, -np.inf], np.nan).dropna()
+    df = cast(pd.DataFrame,
+              df[FEATURES + ['target']].replace([np.inf, -np.inf], np.nan).dropna())
     if df.empty:
         return None
 

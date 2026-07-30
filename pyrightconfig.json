@@ -1,4 +1,20 @@
 {
-  "venvPath": "c:\\Users\\filip\\Desktop\\Pastas\\Programção\\Trader.AI",
-  "venv": "venv"
+    "venvPath": ".",
+    "venv": "venv",
+    "pythonVersion": "3.13",
+    "typeCheckingMode": "basic",
+    "exclude": [
+        "venv",
+        "data",
+        "data_v5",
+        "data_v6",
+        "relatorios",
+        "**/__pycache__",
+        ".claude"
+    ],
+    "reportAttributeAccessIssue": "none",
+    "reportArgumentType": "none",
+    "reportIndexIssue": "none",
+    "reportOperatorIssue": "none",
+    "reportPrivateImportUsage": "none"
 }

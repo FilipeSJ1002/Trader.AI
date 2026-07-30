@@ -207,7 +207,8 @@ def describe_signal(daily_closes: dict) -> dict:
         sma50  = _sma(close, ALT_SMA)
         price  = float(close.iloc[-1]) if close is not None and len(close) else None
         window = min(ATH_WINDOW, len(close)) if close is not None else 0
-        ath90  = float(close.iloc[-window:].max()) if window > 0 else None
+        ath90  = (float(close.iloc[-window:].max())
+                  if close is not None and window > 0 else None)
         rm     = (_rel_momentum(close, btc_close, MOM_REL)
                   if sym != RISK_ON_REF else 0.0)
         out["assets"][sym] = {

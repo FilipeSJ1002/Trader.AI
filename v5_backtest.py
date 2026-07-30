@@ -598,7 +598,8 @@ def run_backtest(split="test", use_lev=True, allow_short=True,
 
     real_start = pd.Timestamp(p_start)
     real_end   = df_t["exit_ts"].dropna().max()
-    n_days     = max((real_end - real_start).days, 1) if pd.notna(real_end) else 1
+    tem_fim    = bool(pd.notna(real_end))   # escalar — bool() explicito p/ o linter
+    n_days     = max((real_end - real_start).days, 1) if tem_fim else 1
 
     total_ret   = (cap / START_USD - 1) * 100
     daily_ret   = total_ret / n_days
@@ -614,7 +615,7 @@ def run_backtest(split="test", use_lev=True, allow_short=True,
 
     print(f"\n{'─'*70}")
     print(f"{sep}")
-    print(f"  RESUMO FINAL ({p_start} -> {real_end.date() if pd.notna(real_end) else '?'})")
+    print(f"  RESUMO FINAL ({p_start} -> {real_end.date() if tem_fim else '?'})")
     print(f"{sep}")
     print(f"  Capital inicial       : ${START_USD:>12,.2f}")
     print(f"  Capital final         : ${cap:>12,.2f}   ({total_ret:+.1f}%)")

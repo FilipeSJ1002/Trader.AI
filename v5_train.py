@@ -23,6 +23,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset, SubsetRandomSampler
 from datetime import datetime
+from typing import Optional
 
 from v5_model import get_model, get_device, count_params, N_CLASSES
 from v5_data_prep import ASSETS, CLASS_NAMES
@@ -61,7 +62,7 @@ class FocalLoss(nn.Module):
 
     gamma=2 e o valor canonico da literatura (Lin et al., 2017 — RetinaNet).
     """
-    def __init__(self, gamma: float = 2.0, weight: torch.Tensor = None):
+    def __init__(self, gamma: float = 2.0, weight: Optional[torch.Tensor] = None):
         super().__init__()
         self.gamma  = gamma
         self.weight = weight   # alpha por classe (tensor [N_CLASSES])
@@ -313,6 +314,7 @@ def train():
         train_loss = tot_loss / max(nb, 1)
 
         probs, labels, val_loss = evaluate(model, "val", device, criterion)
+        assert val_loss is not None    # criterion foi passado -> sempre calculado
         acc, res = directional_metrics(probs, labels)
         scheduler.step()
 

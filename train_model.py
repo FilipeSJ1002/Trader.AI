@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 import pandas_ta as ta
 import lightgbm as lgb
+from typing import Optional, cast
 from dotenv import load_dotenv
 from sklearn.metrics import (classification_report, accuracy_score,
                              precision_score, recall_score, roc_auc_score)
@@ -275,7 +276,8 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     # ── Target R:R (vetorizado) ───────────────────────────────────────────
     df['target'] = _compute_target_rr(df, 'ATR_abs')
 
-    out = df[FEATURES + ['target']].replace([np.inf, -np.inf], np.nan).dropna()
+    out = cast(pd.DataFrame,
+               df[FEATURES + ['target']].replace([np.inf, -np.inf], np.nan).dropna())
     for c in FEATURES:
         out[c] = out[c].astype(np.float32)
     out['target'] = out['target'].astype(np.int8)
@@ -315,7 +317,7 @@ def walk_forward_eval(df_model: pd.DataFrame, n_folds: int = 5) -> dict:
               callbacks=[lgb.early_stopping(40, verbose=False),
                          lgb.log_evaluation(period=-1)])
 
-        y_prob = m.predict_proba(X_te)[:, 1]
+        y_prob = np.asarray(m.predict_proba(X_te))[:, 1]
         y_pred = (y_prob >= 0.50).astype(int)
 
         prec = precision_score(y_te, y_pred, zero_division=0)
@@ -431,7 +433,7 @@ def train(pairs: list = None, candles_per_pair: int = None,
                    lgb.log_evaluation(period=100)]
     )
 
-    y_prob = final_model.predict_proba(X_val)[:, 1]
+    y_prob = np.asarray(final_model.predict_proba(X_val))[:, 1]
     y_pred = (y_prob >= 0.50).astype(int)
 
     print("\n[TRAIN] --- Avaliacao Final (ultimos 10%) ---")
@@ -469,10 +471,11 @@ def train(pairs: list = None, candles_per_pair: int = None,
 
 
 # Alias publico para importacao pelo retrain_scheduler.py
-def train_model(pairs: list = None, candles_per_pair: int = None,
-                extra_samples: pd.DataFrame = None) -> dict:
+def train_model(pairs: Optional[list] = None, candles_per_pair: Optional[int] = None,
+                extra_samples: Optional[pd.DataFrame] = None) -> dict:
     """Alias de train() com assinatura padronizada para o retrain_scheduler."""
-    return train(pairs=pairs, candles_per_pair=candles_per_pair, extra_samples=extra_samples)
+    return train(pairs=pairs, candles_per_pair=candles_per_pair,
+                 extra_samples=extra_samples) or {}
 
 
 if __name__ == "__main__":

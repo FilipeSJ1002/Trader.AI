@@ -1,6 +1,7 @@
 import itertools
 import pandas as pd
 import numpy as np
+from typing import cast
 import pandas_ta as ta
 import joblib
 import os
@@ -25,9 +26,11 @@ def simulate(records, params):
     tp_price = 0.0
     atr_value = 0.0
     bars_held = 0
-    
+    sell_price = 0.0      # inicializados: se 'records' vier vazio ou nenhuma
+    current_price = 0.0   # venda ocorrer, o codigo abaixo ainda tem valor valido
+
     TAKER_FEE = 0.001
-    
+
     for row in records:
         current_price = row['close']
         current_high = row['high']
@@ -158,20 +161,23 @@ def run():
     macd_hist_col = [c for c in cols if c.startswith('MACDh_')][0]
     df['prev_macd_hist'] = df[macd_hist_col].shift(1)
     
+    # Nomes das colunas de indicadores: usados MESMO sem o modelo ML
+    # (antes ficavam dentro do if e o backtest quebrava com NameError)
+    bbu_col = [c for c in cols if c.startswith('BBU_')][0]
+    bbl_col = [c for c in cols if c.startswith('BBL_')][0]
+    atr_col = [c for c in cols if c.startswith('ATRr_')][0]
+    rsi_col = [c for c in cols if c.startswith('RSI_')][0]
+    obv_col = [c for c in cols if c.startswith('OBV')][0]
+    vwap_col = [c for c in cols if c.startswith('VWAP')][0]
+    roc_5_col = [c for c in cols if c.startswith('ROC_5')][0]
+    roc_15_col = [c for c in cols if c.startswith('ROC_15')][0]
+    ema_200_col = [c for c in cols if c.startswith('EMA_200')][0]
+
     print("Loading ML...")
     model_path = "scalper_model.pkl"
     if os.path.exists(model_path):
         model = joblib.load(model_path)
-        bbu_col = [c for c in cols if c.startswith('BBU_')][0]
-        bbl_col = [c for c in cols if c.startswith('BBL_')][0]
-        atr_col = [c for c in cols if c.startswith('ATRr_')][0]
-        rsi_col = [c for c in cols if c.startswith('RSI_')][0]
-        obv_col = [c for c in cols if c.startswith('OBV')][0]
-        vwap_col = [c for c in cols if c.startswith('VWAP')][0]
-        roc_5_col = [c for c in cols if c.startswith('ROC_5')][0]
-        roc_15_col = [c for c in cols if c.startswith('ROC_15')][0]
-        ema_200_col = [c for c in cols if c.startswith('EMA_200')][0]
-        
+
         X = pd.DataFrame({
             'RSI': df[rsi_col],
             'MACDh': df[macd_hist_col],
@@ -207,7 +213,8 @@ def run():
     df['atr'] = df[atr_col]
     df['ema_200'] = df[ema_200_col]
     
-    records = df[['close', 'high', 'low', 'rsi', 'macd_hist', 'bb_lower', 'atr', 'ema_200', 'ml_prob_success', 'prev_macd_hist', 'Cup_and_Handle', 'CDL_ENGULFING', 'CDL_HAMMER', 'CDL_MORNINGSTAR']].to_dict('records')
+    df_records = cast(pd.DataFrame, df[['close', 'high', 'low', 'rsi', 'macd_hist', 'bb_lower', 'atr', 'ema_200', 'ml_prob_success', 'prev_macd_hist', 'Cup_and_Handle', 'CDL_ENGULFING', 'CDL_HAMMER', 'CDL_MORNINGSTAR']])
+    records = df_records.to_dict(orient='records')
 
     print("Running greedy targeted optimization...")
     # Buscando TP curtos e Stops longos e vice-versa para encontrar a anomalia ganhadora
