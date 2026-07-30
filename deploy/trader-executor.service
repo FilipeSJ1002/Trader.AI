@@ -7,8 +7,11 @@ Wants=network-online.target
 Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/trader-ai
-EnvironmentFile=/home/ubuntu/trader-ai/.env
 Environment=PYTHONUNBUFFERED=1
+
+# As chaves NAO sao lidas por EnvironmentFile de proposito: o parser do systemd
+# engasga com comentarios e acentos, e o proprio executor ja carrega o .env do
+# WorkingDirectory via python-dotenv. Um caminho so, sem duplicidade.
 
 # TESTNET: sem a flag --real, o executor NUNCA toca em dinheiro de verdade.
 # Trocar isto exige edicao consciente deste arquivo + systemctl daemon-reload.
