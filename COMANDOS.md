@@ -201,6 +201,23 @@ tmux new -s traderv4 -d '/home/ubuntu/Trader.AI/venv/bin/uvicorn main:app --host
 
 Instalação do zero num servidor novo: ver `deploy/README_DEPLOY.md`.
 
+### Auditoria — o que a corretora diz que aconteceu
+
+O log conta a intenção do bot; isto conta os fatos. Mostra se **todo stop loss foi
+mesmo criado**, como cada posição foi encerrada e para onde foi o dinheiro
+(resultado × taxas × funding):
+
+```bash
+cd ~/trader-ai && ./venv/bin/python v6_auditoria.py --dias 7
+```
+
+Contar operações de verdade no log (⚠️ `grep -c "ABRIR"` conta errado — a linha
+"PODE ABRIR NOVA POSICAO" também casa):
+
+```bash
+sudo journalctl -u trader-executor --since "8 days ago" | grep -cE "ABRIR (LONG|SHORT)"
+```
+
 ---
 
 ## 6. Backtest e validação

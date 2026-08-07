@@ -206,19 +206,44 @@ class FuturesExecutor:
                 return float(a["balance"])
         return 0.0
 
+    def _alavancagem_da_conta(self):
+        """
+        Alavancagem configurada por simbolo, lida do endpoint da conta.
+
+        O endpoint de posicoes deixou de devolver o campo 'leverage' em versoes
+        recentes da API. Com o antigo `.get("leverage", 1)`, toda posicao passava
+        a valer alavancagem 1 e o calculo de exposicao usava o valor NOCIONAL
+        inteiro: uma entrada de $1.000 de margem a 5x aparecia como "exposicao
+        100%" e bloqueava o bot por horas (visto no log de 01 e 03/08/2026).
+        """
+        try:
+            conta = self.api.futures_account()
+        except Exception as e:
+            log(f"  [AVISO] nao foi possivel ler a alavancagem da conta: {e}")
+            return {}
+        return {p["symbol"]: int(float(p.get("leverage", 1)))
+                for p in conta.get("positions", []) if p.get("leverage")}
+
     def posicoes_abertas(self):
         """Le da CORRETORA — fonte da verdade, nao o arquivo local."""
+        brutas = [p for p in self.api.futures_position_information()
+                  if abs(float(p["positionAmt"])) > 0]
+        # So consulta a conta se alguma posicao vier sem o campo de alavancagem
+        precisa_fallback = any(not p.get("leverage") for p in brutas)
+        lev_conta = self._alavancagem_da_conta() if precisa_fallback else {}
+
         out = {}
-        for p in self.api.futures_position_information():
+        for p in brutas:
             amt = float(p["positionAmt"])
-            if abs(amt) > 0:
-                out[p["symbol"]] = {
-                    "qtd": amt,
-                    "direcao": "LONG" if amt > 0 else "SHORT",
-                    "entrada": float(p["entryPrice"]),
-                    "pnl_nao_realizado": float(p.get("unRealizedProfit", 0)),
-                    "alavancagem": int(float(p.get("leverage", 1))),
-                }
+            lev = p.get("leverage")
+            lev = int(float(lev)) if lev else lev_conta.get(p["symbol"], 1)
+            out[p["symbol"]] = {
+                "qtd": amt,
+                "direcao": "LONG" if amt > 0 else "SHORT",
+                "entrada": float(p["entryPrice"]),
+                "pnl_nao_realizado": float(p.get("unRealizedProfit", 0)),
+                "alavancagem": max(lev, 1),
+            }
         return out
 
     def ordens_abertas(self, symbol=None):
@@ -228,16 +253,92 @@ class FuturesExecutor:
 
     # ── Escrita (protegida pelo dry_run) ────────────────────────────────────
     def _enviar(self, descricao, fn, **kwargs):
+        """
+        Envia uma ordem e SO considera sucesso se a corretora devolver um
+        orderId.
+
+        Por que a checagem existe (auditoria de 06/08/2026): durante uma semana
+        na testnet, as seis ordens de STOP LOSS e TAKE PROFIT foram logadas como
+        "[ENVIADO] ... id=None" e NENHUMA delas existia na corretora. A chamada
+        nao levantava excecao, entao o bot seguia operando convencido de que as
+        posicoes estavam protegidas. Ausencia de erro nao e prova de sucesso.
+        """
         if self.dry_run:
             log(f"  [DRY-RUN] {descricao} | {kwargs}")
             return {"dry_run": True}
         try:
             r = fn(**kwargs)
-            log(f"  [ENVIADO] {descricao} | id={r.get('orderId')}")
-            return r
         except Exception as e:
             log(f"  [ERRO] {descricao} falhou: {e}")
             return None
+
+        oid = r.get("orderId") if isinstance(r, dict) else None
+        if oid is None:
+            log(f"  [ERRO] {descricao}: a corretora respondeu SEM orderId — "
+                f"a ordem NAO foi criada. Resposta: {r}")
+            return None
+        log(f"  [ENVIADO] {descricao} | id={oid}")
+        return r
+
+    def _aguardar_posicao(self, symbol, tentativas=6, espera=1.0):
+        """
+        Espera a posicao aparecer na corretora depois da ordem a mercado.
+
+        Ordens condicionais so podem ser criadas sobre uma posicao que ja
+        existe — foi exatamente o que derrubou o stop do AVAX em 02/08/2026
+        (APIError -4509: "TIF GTE can only be used with open positions").
+        """
+        for tentativa in range(tentativas):
+            pos = self.posicoes_abertas().get(symbol)
+            if pos:
+                if tentativa:
+                    log(f"  Posicao de {symbol} confirmada apos {tentativa+1} tentativa(s)")
+                return pos
+            time.sleep(espera)
+        return None
+
+    def _proteger_posicao(self, symbol, lado_saida, qtd, sl_price, tp_price):
+        """
+        Registra STOP LOSS e TAKE PROFIT na corretora e VERIFICA que ficaram la.
+
+        Usa quantity + reduceOnly (e nao closePosition + GTE_GTC): e o mesmo
+        formato das ordens de fechamento, que comprovadamente funcionam nesta
+        conta. Devolve True apenas se o STOP existir de fato ao final.
+        """
+        sl = self._enviar(
+            f"STOP LOSS {symbol} @ {sl_price}",
+            self.api.futures_create_order,
+            symbol=symbol, side=lado_saida, type="STOP_MARKET",
+            stopPrice=sl_price, quantity=qtd, reduceOnly=True,
+        )
+        if sl is None:
+            return False
+
+        # O alvo e desejavel, mas nao critico: sem ele a posicao ainda tem
+        # stop, e a saida por sinal/tempo do proprio bot continua valendo.
+        tp = self._enviar(
+            f"TAKE PROFIT {symbol} @ {tp_price}",
+            self.api.futures_create_order,
+            symbol=symbol, side=lado_saida, type="TAKE_PROFIT_MARKET",
+            stopPrice=tp_price, quantity=qtd, reduceOnly=True,
+        )
+        if tp is None:
+            log(f"  [AVISO] {symbol} ficou SEM take profit na corretora "
+                f"(o stop esta registrado; a saida por alvo depende do bot)")
+
+        # Confirmacao final na fonte da verdade: a propria corretora
+        try:
+            abertas = self.ordens_abertas(symbol)
+        except Exception as e:
+            log(f"  [ERRO] nao foi possivel verificar as ordens de {symbol}: {e}")
+            return False
+        tipos = {o.get("type") for o in abertas}
+        if "STOP_MARKET" not in tipos:
+            log(f"  [ERRO] {symbol}: o stop nao aparece nas ordens abertas "
+                f"(tipos encontrados: {sorted(tipos) or 'nenhum'})")
+            return False
+        log(f"  [OK] {symbol} protegido na corretora: {sorted(tipos)}")
+        return True
 
     def abrir_posicao(self, symbol, direcao, margem_usd, alavancagem,
                       sl_price, tp_price, preco_ref):
@@ -299,23 +400,35 @@ class FuturesExecutor:
         if entrada is None:
             return None
 
-        # 3. Stop loss (reduce-only, fica na corretora)
-        self._enviar(
-            f"STOP LOSS {symbol} @ {sl_price}",
-            self.api.futures_create_order,
-            symbol=symbol, side=lado_saida, type="STOP_MARKET",
-            stopPrice=sl_price, closePosition=True, timeInForce="GTE_GTC",
-        )
+        if self.dry_run:
+            log(f"  [DRY-RUN] registraria STOP LOSS {symbol} @ {sl_price} "
+                f"e TAKE PROFIT @ {tp_price} (quantity={qtd}, reduceOnly)")
+            return {"symbol": symbol, "direcao": direcao, "qtd": qtd,
+                    "alavancagem": alavancagem, "sl": sl_price, "tp": tp_price,
+                    "aberta_em": datetime.now(timezone.utc).isoformat()}
 
-        # 4. Take profit (reduce-only, fica na corretora)
-        self._enviar(
-            f"TAKE PROFIT {symbol} @ {tp_price}",
-            self.api.futures_create_order,
-            symbol=symbol, side=lado_saida, type="TAKE_PROFIT_MARKET",
-            stopPrice=tp_price, closePosition=True, timeInForce="GTE_GTC",
-        )
+        # 3. A posicao precisa EXISTIR antes de aceitar ordens condicionais
+        pos = self._aguardar_posicao(symbol)
+        if pos is None:
+            log(f"  [ERRO] {symbol}: entrada enviada mas a posicao nao apareceu "
+                f"na corretora — fechando por seguranca")
+            self.fechar_posicao(symbol, motivo="posicao nao confirmada")
+            return None
 
-        return {"symbol": symbol, "direcao": direcao, "qtd": qtd,
+        # 4. Protecao (stop + alvo), verificada na corretora
+        qtd_real = abs(pos["qtd"])
+        if not self._proteger_posicao(symbol, lado_saida, qtd_real, sl_price, tp_price):
+            # Uma posicao alavancada sem stop e o risco que este projeto
+            # existe para eliminar. Se nao da para proteger, nao se opera.
+            log(f"  [CRITICO] {symbol} sem STOP LOSS na corretora — "
+                f"FECHANDO a posicao imediatamente")
+            if self.fechar_posicao(symbol, motivo="falha ao registrar o stop loss") is None:
+                log(f"  [SOCORRO] {symbol}: NAO foi possivel fechar a posicao "
+                    f"desprotegida. INTERVENCAO MANUAL NECESSARIA: "
+                    f"python v6_executor.py --fechar {symbol}")
+            return None
+
+        return {"symbol": symbol, "direcao": direcao, "qtd": qtd_real,
                 "alavancagem": alavancagem, "sl": sl_price, "tp": tp_price,
                 "aberta_em": datetime.now(timezone.utc).isoformat()}
 
