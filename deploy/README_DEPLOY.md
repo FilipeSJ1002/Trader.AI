@@ -31,18 +31,31 @@ curl -s -o /dev/null -w "%{http_code}\n" https://api.binance.com/api/v3/ping
 O executor **não precisa dos parquets** de `data/` — ele busca os candles pela
 API pública a cada ciclo. Não copie os datasets (são GBs à toa).
 
-## 2. O que copiar para o servidor
+## 2. O código: clonar do GitHub (não copiar arquivo por arquivo)
+
+O repositório é público, então o servidor clona direto — sem chave, sem `scp`:
 
 ```bash
-# Do seu PC (PowerShell), ajuste o IP e o caminho da chave .pem
-scp -i chave.pem v6_executor.py v6_ciclo.py v5_model.py v5_data_prep.py v5_backtest.py v5_live.py requirements-server.txt v5_model_b.pth ubuntu@SEU_IP:/home/ubuntu/trader-ai/
+git clone https://github.com/FilipeSJ1002/Trader.AI.git /home/ubuntu/trader-ai
 ```
 
-O `.env` vai **separado e nunca pelo git**:
+Atualizações posteriores viram `cd ~/trader-ai && git pull`.
+
+**Dois arquivos não estão no GitHub** (o `.gitignore` os exclui de propósito) e
+precisam ir uma única vez por `scp`, do seu PC:
+
+| Arquivo | Por que fica de fora |
+|---|---|
+| `.env` | contém as chaves de API |
+| `v5_model_b.pth` | binário de 8 MB (modelo treinado) |
 
 ```bash
-scp -i chave.pem .env ubuntu@SEU_IP:/home/ubuntu/trader-ai/.env
+scp -i chave.pem .env v5_model_b.pth ubuntu@SEU_IP:/home/ubuntu/trader-ai/
 ```
+
+> Evite montar a pasta com `scp` de arquivos soltos: se um comando roda na
+> janela errada, o servidor fica com código antigo e nada avisa. Aconteceu em
+> 07/08/2026 e custou meia hora de diagnóstico.
 
 > No servidor, deixe só as chaves de **futuros testnet** no `.env`
 > (`BINANCE_FUTURES_*`). Não suba as chaves de produção da Binance para uma

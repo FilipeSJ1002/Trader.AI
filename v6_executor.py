@@ -247,9 +247,35 @@ class FuturesExecutor:
         return out
 
     def ordens_abertas(self, symbol=None):
-        if symbol:
-            return self.api.futures_get_open_orders(symbol=symbol)
-        return self.api.futures_get_open_orders()
+        """
+        Ordens pendentes: as comuns E as CONDICIONAIS (stop, alvo).
+
+        A Binance mantem as condicionais num sistema separado — "algo orders" —
+        que NAO aparece em futures_get_open_orders. Por isso o status sempre
+        mostrou "ORDENS PENDENTES: 0" mesmo com stop registrado, e por isso a
+        verificacao de protecao dava falso negativo (07/08/2026).
+
+        Os campos das condicionais tem outros nomes (algoId, orderType,
+        triggerPrice); normalizamos para o formato das comuns para que o resto
+        do codigo trate as duas do mesmo jeito.
+        """
+        p = {"symbol": symbol} if symbol else {}
+        comuns = list(self.api.futures_get_open_orders(**p))
+
+        try:
+            algo = self.api.futures_get_open_algo_orders(**p)
+        except Exception as e:
+            log(f"  [AVISO] nao foi possivel listar ordens condicionais: {e}")
+            return comuns
+
+        if isinstance(algo, dict):                 # {"orders": [...]} ou {}
+            algo = algo.get("orders") or []
+        for o in algo:
+            o.setdefault("type", o.get("orderType", "CONDITIONAL"))
+            o.setdefault("stopPrice", o.get("triggerPrice"))
+            o.setdefault("orderId", o.get("algoId"))
+            o.setdefault("status", o.get("algoStatus", "NEW"))
+        return comuns + list(algo)
 
     # ── Escrita (protegida pelo dry_run) ────────────────────────────────────
     def _enviar(self, descricao, fn, **kwargs):
@@ -272,12 +298,28 @@ class FuturesExecutor:
             log(f"  [ERRO] {descricao} falhou: {e}")
             return None
 
-        oid = r.get("orderId") if isinstance(r, dict) else None
-        if oid is None:
-            log(f"  [ERRO] {descricao}: a corretora respondeu SEM orderId — "
-                f"a ordem NAO foi criada. Resposta: {r}")
+        if not isinstance(r, dict):
+            log(f"  [ERRO] {descricao}: resposta inesperada da corretora: {r}")
             return None
-        log(f"  [ENVIADO] {descricao} | id={oid}")
+
+        # Ordens comuns voltam com 'orderId'. As CONDICIONAIS (stop, alvo) vao
+        # para o sistema de Algo Orders da Binance e voltam com 'algoId' +
+        # 'algoStatus' — exigir apenas 'orderId' fazia o bot descartar ordens
+        # legitimas e fechar posicoes ja protegidas (07/08/2026).
+        ident = r.get("orderId") or r.get("algoId")
+        if ident is None:
+            log(f"  [ERRO] {descricao}: a corretora respondeu sem identificador "
+                f"de ordem — NAO foi criada. Resposta: {r}")
+            return None
+
+        estado = r.get("algoStatus")
+        if estado is not None and estado not in ("NEW", "WORKING"):
+            log(f"  [ERRO] {descricao}: ordem condicional em estado inesperado "
+                f"({estado}). Resposta: {r}")
+            return None
+
+        sufixo = f" (condicional, {estado})" if estado else ""
+        log(f"  [ENVIADO] {descricao} | id={ident}{sufixo}")
         return r
 
     def _aguardar_posicao(self, symbol, tentativas=6, espera=1.0):
@@ -297,19 +339,24 @@ class FuturesExecutor:
             time.sleep(espera)
         return None
 
-    def _proteger_posicao(self, symbol, lado_saida, qtd, sl_price, tp_price):
+    def _proteger_posicao(self, symbol, lado_saida, sl_price, tp_price):
         """
         Registra STOP LOSS e TAKE PROFIT na corretora e VERIFICA que ficaram la.
 
-        Usa quantity + reduceOnly (e nao closePosition + GTE_GTC): e o mesmo
-        formato das ordens de fechamento, que comprovadamente funcionam nesta
-        conta. Devolve True apenas se o STOP existir de fato ao final.
+        Formato: closePosition=True + timeInForce=GTE_GTC, sem quantity.
+        E o unico com evidencia de funcionar nesta conta — a auditoria de
+        06/08/2026 mostra o par registrado e com comportamento OCO nativo
+        (quando o alvo disparou, o stop expirou sozinho). A alternativa
+        quantity+reduceOnly perderia esse OCO e deixaria stops orfaos.
+
+        Devolve True apenas se o STOP existir de fato ao final, consultado na
+        corretora (incluindo o sistema de ordens condicionais).
         """
         sl = self._enviar(
             f"STOP LOSS {symbol} @ {sl_price}",
             self.api.futures_create_order,
             symbol=symbol, side=lado_saida, type="STOP_MARKET",
-            stopPrice=sl_price, quantity=qtd, reduceOnly=True,
+            stopPrice=sl_price, closePosition=True, timeInForce="GTE_GTC",
         )
         if sl is None:
             return False
@@ -320,25 +367,34 @@ class FuturesExecutor:
             f"TAKE PROFIT {symbol} @ {tp_price}",
             self.api.futures_create_order,
             symbol=symbol, side=lado_saida, type="TAKE_PROFIT_MARKET",
-            stopPrice=tp_price, quantity=qtd, reduceOnly=True,
+            stopPrice=tp_price, closePosition=True, timeInForce="GTE_GTC",
         )
         if tp is None:
             log(f"  [AVISO] {symbol} ficou SEM take profit na corretora "
                 f"(o stop esta registrado; a saida por alvo depende do bot)")
 
-        # Confirmacao final na fonte da verdade: a propria corretora
-        try:
-            abertas = self.ordens_abertas(symbol)
-        except Exception as e:
-            log(f"  [ERRO] nao foi possivel verificar as ordens de {symbol}: {e}")
-            return False
-        tipos = {o.get("type") for o in abertas}
-        if "STOP_MARKET" not in tipos:
-            log(f"  [ERRO] {symbol}: o stop nao aparece nas ordens abertas "
-                f"(tipos encontrados: {sorted(tipos) or 'nenhum'})")
-            return False
-        log(f"  [OK] {symbol} protegido na corretora: {sorted(tipos)}")
-        return True
+        # Confirmacao final na fonte da verdade: a propria corretora.
+        # Com tentativas: uma ordem recem-criada pode levar um instante para
+        # aparecer na listagem, e desistir na primeira consulta faria o bot
+        # fechar uma posicao que estava protegida.
+        tipos = set()
+        for tentativa in range(3):
+            try:
+                abertas = self.ordens_abertas(symbol)
+            except Exception as e:
+                log(f"  [AVISO] falha ao consultar ordens de {symbol} "
+                    f"(tentativa {tentativa+1}/3): {e}")
+                time.sleep(1.0)
+                continue
+            tipos = {o.get("type") for o in abertas}
+            if "STOP_MARKET" in tipos:
+                log(f"  [OK] {symbol} protegido na corretora: {sorted(tipos)}")
+                return True
+            time.sleep(1.0)
+
+        log(f"  [ERRO] {symbol}: o stop nao aparece nas ordens da corretora "
+            f"apos 3 tentativas (tipos encontrados: {sorted(tipos) or 'nenhum'})")
+        return False
 
     def abrir_posicao(self, symbol, direcao, margem_usd, alavancagem,
                       sl_price, tp_price, preco_ref):
@@ -402,7 +458,7 @@ class FuturesExecutor:
 
         if self.dry_run:
             log(f"  [DRY-RUN] registraria STOP LOSS {symbol} @ {sl_price} "
-                f"e TAKE PROFIT @ {tp_price} (quantity={qtd}, reduceOnly)")
+                f"e TAKE PROFIT @ {tp_price} (ordens condicionais, closePosition)")
             return {"symbol": symbol, "direcao": direcao, "qtd": qtd,
                     "alavancagem": alavancagem, "sl": sl_price, "tp": tp_price,
                     "aberta_em": datetime.now(timezone.utc).isoformat()}
@@ -417,7 +473,7 @@ class FuturesExecutor:
 
         # 4. Protecao (stop + alvo), verificada na corretora
         qtd_real = abs(pos["qtd"])
-        if not self._proteger_posicao(symbol, lado_saida, qtd_real, sl_price, tp_price):
+        if not self._proteger_posicao(symbol, lado_saida, sl_price, tp_price):
             # Uma posicao alavancada sem stop e o risco que este projeto
             # existe para eliminar. Se nao da para proteger, nao se opera.
             log(f"  [CRITICO] {symbol} sem STOP LOSS na corretora — "
@@ -457,9 +513,15 @@ class FuturesExecutor:
             return
         try:
             self.api.futures_cancel_all_open_orders(symbol=symbol)
-            log(f"  [ENVIADO] canceladas {len(abertas)} ordem(ns) de {symbol}")
         except Exception as e:
-            log(f"  [ERRO] cancelamento de {symbol}: {e}")
+            log(f"  [ERRO] cancelamento de ordens comuns de {symbol}: {e}")
+        # As condicionais tem endpoint proprio: sem isto, o stop e o alvo
+        # sobrariam orfaos na corretora depois de fechar a posicao.
+        try:
+            self.api.futures_cancel_all_algo_open_orders(symbol=symbol)
+        except Exception as e:
+            log(f"  [AVISO] cancelamento de condicionais de {symbol}: {e}")
+        log(f"  [ENVIADO] canceladas {len(abertas)} ordem(ns) de {symbol}")
 
     # ── Verificacoes de seguranca ───────────────────────────────────────────
     def pode_abrir(self, saldo):

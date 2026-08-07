@@ -60,7 +60,33 @@ def main():
             todas += ex.api.futures_get_all_orders(symbol=sym, startTime=inicio, limit=500)
         except Exception as e:
             print(f"  [aviso] {sym}: {e}")
+
+    # As ordens CONDICIONAIS (stop e alvo) vivem no sistema de algo orders e
+    # NAO aparecem na consulta acima. Foi o que fez a primeira versao desta
+    # ferramenta concluir "nenhuma posicao teve stop" — conclusao errada.
+    condicionais = []
+    for sym in simbolos:
+        try:
+            r = ex.api.futures_get_all_algo_orders(symbol=sym, startTime=inicio, limit=100)
+        except Exception as e:
+            print(f"  [aviso] condicionais de {sym}: {e}")
+            continue
+        if isinstance(r, dict):
+            r = r.get("orders") or []
+        for o in r:
+            o["time"] = o.get("createTime", o.get("time", 0))
+            o["type"] = o.get("orderType", "CONDITIONAL")
+            o["stopPrice"] = o.get("triggerPrice")
+            o["status"] = o.get("algoStatus", "?")
+            o["clientOrderId"] = o.get("clientAlgoId", "?")
+            o["executedQty"] = o.get("executedQty", o.get("quantity", "0"))
+            o["_condicional"] = True
+        condicionais += r
+
+    todas += condicionais
     todas.sort(key=lambda o: o["time"])
+    print(f"\n  ({len(todas) - len(condicionais)} ordens comuns + "
+          f"{len(condicionais)} condicionais)")
 
     if not todas:
         print("  Nenhuma ordem no periodo.")
@@ -108,13 +134,12 @@ def main():
     print("=" * 78)
 
     print("""
-  ATENCAO ao ler esta secao: ordens enviadas com closePosition=true sao
-  condicionais de POSICAO e NAO aparecem neste historico enquanto estao
-  pendentes. Quando disparam, materializam-se como uma ordem MARKET ja com
-  closePosition=True. Portanto:
-    [OK]            ordem condicional visivel  -> protecao comprovada
-    [INDETERMINADO] saida com closePosition    -> a protecao existia, mas nao
-                                                  da para auditar o gatilho
+  Esta secao ja consulta o sistema de ordens CONDICIONAIS (algo orders), onde
+  stop e alvo realmente vivem. Leitura:
+    [OK]            stop e alvo encontrados    -> protecao comprovada
+    [INDETERMINADO] sem condicional no registro, mas a saida tem
+                    closePosition=True         -> protecao provavelmente existia
+                                                  (ordem antiga, antes do fix)
     [FALHA]         nem uma coisa nem outra    -> posicao ficou desprotegida
 """)
 

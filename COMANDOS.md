@@ -184,13 +184,27 @@ sudo systemctl stop trader-executor
 cd ~/trader-ai && ./venv/bin/python v6_executor.py --fechar-tudo
 ```
 
-Atualizar o código depois de mexer no PC (rodar **no PC**, na raiz do projeto):
-```powershell
-scp -i "$env:USERPROFILE\.ssh\id_ed25519" v6_executor.py v6_ciclo.py v5_model.py v5_data_prep.py v5_backtest.py ubuntu@54.249.163.86:~/trader-ai/
-```
-depois, no servidor:
+**Atualizar o código (desde 07/08/2026: via git, não mais por `scp`).**
+`~/trader-ai` é um checkout da branch `main`. Você commita e dá push no PC; no
+servidor é um comando só:
+
 ```bash
-sudo systemctl restart trader-executor
+cd ~/trader-ai && git pull && sudo systemctl restart trader-executor
+```
+
+Conferir em que commit o servidor está:
+```bash
+cd ~/trader-ai && git log --oneline -1
+```
+
+> Por que mudou: o `scp` falha em silêncio quando roda na janela errada — o
+> arquivo velho fica lá e o bot roda código antigo sem ninguém perceber
+> (aconteceu em 07/08/2026). Com git, ou o commit está lá ou não está.
+
+**O que o git NÃO traz** (está no `.gitignore`, precisa ir por `scp` uma vez):
+`.env` (chaves) e `v5_model_b.pth` (modelo, 8 MB).
+```powershell
+scp -i "$env:USERPROFILE\.ssh\id_ed25519" .env v5_model_b.pth ubuntu@54.249.163.86:~/trader-ai/
 ```
 
 Religar o bot V4 antigo (está parado; o venv dele foi apagado em 30/07):
