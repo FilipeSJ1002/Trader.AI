@@ -1,0 +1,13 @@
+[Unit]
+Description=Roda a coleta de dados alternativos uma vez por dia
+
+[Timer]
+# Todo dia as 03:00 UTC. A janela publica da Binance para open interest,
+# long/short e taker e de ~21 dias — rodar 1x/dia cobre com folga.
+OnCalendar=*-*-* 03:00:00
+# Se a maquina estiver desligada na hora marcada, roda assim que voltar.
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

@@ -17,3 +17,6 @@ requests==2.32.5
 python_binance==1.0.35
 python-dotenv==1.2.2
 scipy==1.17.1
+# Necessario para o v7_coleta_alternativa.py gravar os .parquet de funding /
+# open interest / long-short. Sem ele o coletor falha no to_parquet().
+pyarrow==23.0.1

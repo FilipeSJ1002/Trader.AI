@@ -1,0 +1,19 @@
+[Unit]
+Description=Trader.AI - coleta diaria de dados alternativos (funding, OI, long/short)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/trader-ai
+Environment=PYTHONUNBUFFERED=1
+
+# --funding rebaixa o historico completo (idempotente: mescla sem duplicar)
+# --snapshot acumula os indicadores que a Binance so publica por ~21 dias.
+# E o snapshot que constroi, dia a dia, a base que nao existe pronta em
+# lugar nenhum. Sem rodar todo dia, a janela se perde para sempre.
+ExecStart=/home/ubuntu/trader-ai/venv/bin/python v7_coleta_alternativa.py --funding --snapshot
+
+StandardOutput=journal
+StandardError=journal

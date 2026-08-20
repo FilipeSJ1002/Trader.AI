@@ -215,6 +215,44 @@ tmux new -s traderv4 -d '/home/ubuntu/Trader.AI/venv/bin/uvicorn main:app --host
 
 Instalação do zero num servidor novo: ver `deploy/README_DEPLOY.md`.
 
+### Coleta diária de dados alternativos (desde 16/08/2026)
+
+Funding, open interest, long/short e fluxo de taker. **Instalar uma vez:**
+
+```bash
+cd ~/trader-ai && ./venv/bin/pip install pyarrow
+```
+
+```bash
+sudo cp ~/trader-ai/deploy/trader-coleta.service ~/trader-ai/deploy/trader-coleta.timer /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now trader-coleta.timer
+```
+
+Conferir que está agendado e ver quando roda de novo:
+
+```bash
+systemctl list-timers trader-coleta --no-pager
+```
+
+Rodar agora, sem esperar o horário:
+
+```bash
+sudo systemctl start trader-coleta.service && sudo journalctl -u trader-coleta -n 30 --no-pager
+```
+
+Ver quanto já foi acumulado:
+
+```bash
+ls -la ~/trader-ai/data_alt/ | head -20
+```
+
+Trazer os dados do servidor para o PC (rodar **no PC**):
+
+```powershell
+scp -i "$env:USERPROFILE\.ssh\id_ed25519" -r ubuntu@54.249.163.86:~/trader-ai/data_alt ./
+```
+
+> Os `.parquet` estão no `.gitignore` — os dados **não** vão pelo git. O servidor é a fonte que roda todo dia; o PC recebe por `scp` quando for testar.
+
 ### Auditoria — o que a corretora diz que aconteceu
 
 O log conta a intenção do bot; isto conta os fatos. Mostra se **todo stop loss foi
