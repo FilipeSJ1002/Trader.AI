@@ -43,3 +43,6 @@ pip_temp/
 backtest_report.html
 *.html
 *.log
+
+# Artefatos que o CatBoost gera sozinho ao treinar (nao sao codigo)
+catboost_info/
