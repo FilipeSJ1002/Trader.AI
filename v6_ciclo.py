@@ -34,11 +34,23 @@ from v5_backtest import v1_scores, leverage_for
 V1_BUY_THRESH  = 60
 V1_SELL_THRESH = 60
 DIRCONF_MIN    = 0.52
-SL_PCT         = 0.005
-TP_PCT         = 0.010
+# ── Config B (adotada em 20/08/2026) ────────────────────────────────────────
+# Medicao em 6.619 eventos, 11 ativos, 2019-2026 (ver v7_dataset.py):
+#   A  1,0%/0,5%/6h    expectancia -0,0325%  t=-3,83   <- era esta em producao
+#   B  3,0%/1,5%/2d    expectancia +0,0746%  t=+2,88   <- 10/11 ativos positivos
+#   C  ATR/6h          expectancia -0,0342%  t=-4,69
+#   D  0,5%/0,5%/1h    expectancia -0,0456%  t=-8,62
+# A taxa de 0,08% consome 8% de um alvo de 1% e apenas 2,7% de um alvo de 3%.
+# A taxa de acerto e quase igual (32,4% vs 34,2%); cada acerto e que vale 3x mais.
+SL_PCT         = 0.015
+TP_PCT         = 0.030
 MAX_LEV        = 5.0
-MAX_HOLD_MIN   = 360
-LEV_CURVE      = "v59"
+MAX_HOLD_MIN   = 2880          # 2 dias
+# Curva 'regime': alavanca so com tendencia forte. Foi a melhor no backtest com
+# capital (val -5,3% / teste +2,2%) contra a 'v59' (-15,5% / +4,5%): com stop de
+# 1,5%, cada perda a 5x tira 7,5% da margem e a curva de capital nao aguenta.
+LEV_CURVE      = "regime"
+FORCA_MIN      = 1.5
 KLINES_NEED    = 1800     # SMA 24h (1440) + folga para EMA200 e dropna
 
 API = "https://api.binance.com/api/v3/klines"
@@ -87,12 +99,23 @@ def _montar_mercado(simbolos):
             continue
         close = a2["close"].reindex(feat.index)
         sma24 = a2["close"].rolling(1440).mean().reindex(feat.index)
+
+        # FORCA da tendencia — formula identica a do v5_backtest.precompute():
+        # distancia relativa a SMA24h, normalizada pela volatilidade tipica do
+        # ativo. A curva 'regime' so alavanca quando esta forca passa de
+        # FORCA_MIN; sem passar este valor, leverage_for devolveria 1x SEMPRE
+        # e a curva viraria 'flat1' em silencio.
+        dist_rel = ((close - sma24).abs() / (sma24 + 1e-9))
+        vol_tipica = dist_rel.rolling(1440, min_periods=120).median()
+        forca = (dist_rel / (vol_tipica + 1e-9)).fillna(0.0)
+
         mercado[s] = {
             "feats":     feat.values.astype(np.float32),
             "feat_cols": list(feat.columns),
             "close":     float(close.iloc[-1]),
             "regime_down": bool(close.iloc[-1] < sma24.iloc[-1])
                            if not np.isnan(sma24.iloc[-1]) else False,
+            "forca":     float(forca.iloc[-1]),
         }
     return mercado
 
@@ -157,7 +180,8 @@ def decidir_entrada(mercado, model_path, ja_abertas, log=print):
         return None
 
     symbol, direcao, v1_sc, dc = melhor
-    lev = leverage_for(dc, True, MAX_LEV, LEV_CURVE)
+    forca = float(mercado[symbol].get("forca", 0.0))
+    lev = leverage_for(dc, True, MAX_LEV, LEV_CURVE, forca, FORCA_MIN)
     if lev == 0.0:
         return None
 
