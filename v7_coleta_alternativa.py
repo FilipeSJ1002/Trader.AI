@@ -158,9 +158,24 @@ def main():
     print(f"\nColetando para {len(ativos)} ativos -> {DEST}\n")
 
     if a.funding:
-        print("FUNDING RATE (historico completo)")
+        print("FUNDING RATE (incremental)")
         for sym in ativos:
-            df = baixa_funding(sym)
+            # Busca so o que falta. Rebaixar os 7 anos todo dia sao ~88
+            # requisicoes inuteis por execucao — foi o que ajudou a estourar
+            # o limite da Binance em 21/08/2026 (APIError -1003, IP banido).
+            caminho = os.path.join(DEST, f"funding_{sym}.parquet")
+            desde = 1500000000000
+            if os.path.exists(caminho):
+                try:
+                    ultimo = pd.read_parquet(caminho).index.max()
+                    desde = int(pd.Timestamp(ultimo).timestamp() * 1000) + 1
+                except Exception as e:
+                    print(f"    [aviso] {sym}: nao li o historico ({e}) — baixando tudo")
+            df = baixa_funding(sym, desde)
+            if (df is None or df.empty) and os.path.exists(caminho):
+                n = len(pd.read_parquet(caminho))
+                print(f"  {sym}: ja atualizado ({n} registros)")
+                continue
             if df is None or df.empty:
                 print(f"  {sym}: sem dados")
                 continue
