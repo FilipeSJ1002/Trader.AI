@@ -71,6 +71,11 @@ CURVAS_LEV = {
     # Sem discriminacao: mesma aposta em tudo que passa do limiar
     "flat2": [(0.52, 2.0)],
     "flat1": [(0.52, 1.0)],
+    # SEM piso de dir_conf — para medir o sistema com a rede neural
+    # desligada. Sem isto, leverage_for zera a entrada em dir_conf
+    # < 0.52 e o "teste sem filtro" na verdade testa o filtro.
+    "flat1_livre": [(0.0, 1.0)],
+    "flat2_livre": [(0.0, 2.0)],
     # Condicionadas ao REGIME (tratadas em codigo, ver leverage_for):
     # alavancam so quando a tendencia esta forte; em lateral operam 1x.
     "regime":      [],
@@ -99,8 +104,13 @@ def leverage_for(dir_conf: float, use_lev: bool, max_lev: float = 5.0,
 
     # Curvas condicionadas ao regime: alavanca so quando a tendencia e forte
     if curva.startswith("regime"):
-        if dir_conf < 0.52:
+        # "regime_livre" ignora o piso de dir_conf: alavanca pela FORCA da
+        # tendencia apenas, deixando a rede neural fora da decisao.
+        if dir_conf < 0.52 and curva != "regime_livre":
             return 0.0
+        if curva == "regime_livre":
+            forte = (forca is not None and forca >= forca_min)
+            return min(max_lev if forte else 1.0, max_lev)
         forte = (forca is not None and forca >= forca_min)
         if curva == "regime":
             # Tendencia forte -> escada normal; lateral -> 1x (so paga o spread)

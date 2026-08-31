@@ -21,6 +21,7 @@ Uso:
 import os
 import sys
 import argparse
+import time
 from datetime import datetime, timedelta, timezone
 
 for _s in (sys.stdout, sys.stderr):
@@ -36,6 +37,68 @@ def ts(ms):
     return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%d/%m %H:%M:%S")
 
 
+def pagina_tudo(chamada, inicio, campo_ts="time", limite=1000, **kw):
+    """
+    Le um endpoint de historico cobrindo a janela inteira.
+
+    Duas armadilhas da API, ambas silenciosas (medidas em 25/08/2026):
+
+      1. JANELA MAXIMA DE 7 DIAS. allOrders, userTrades e income aceitam no
+         maximo 7 dias entre startTime e endTime. Pedindo 30, a corretora
+         devolve so os 7 primeiros dias a partir do startTime. Foi o que fez
+         --dias 30 reportar MENOS perda que --dias 7.
+      2. LIMITE DE REGISTROS. Dentro de cada janela, so vem `limite` registros
+         (os mais antigos). Por isso tambem paginamos dentro da fatia.
+    """
+    SETE_DIAS = 7 * 24 * 60 * 60 * 1000
+    agora = int(time.time() * 1000)
+    saida, visto = [], set()
+
+    ini_fatia = inicio
+    while ini_fatia < agora:
+        fim_fatia = min(ini_fatia + SETE_DIAS, agora)
+        cursor = ini_fatia
+        while True:
+            lote = chamada(startTime=cursor, endTime=fim_fatia,
+                           limit=limite, **kw)
+            if isinstance(lote, dict):
+                lote = lote.get("orders") or []
+            if not lote:
+                break
+            for x in lote:
+                chave = id_registro(x)
+                if chave not in visto:
+                    visto.add(chave)
+                    saida.append(x)
+            if len(lote) < limite:
+                break
+            tempos = [int(x[campo_ts]) for x in lote
+                      if x.get(campo_ts) is not None]
+            if not tempos:
+                break
+            prox = max(tempos) + 1
+            if prox <= cursor:
+                break
+            cursor = prox
+            time.sleep(0.2)
+        ini_fatia = fim_fatia + 1
+        time.sleep(0.2)
+    return saida
+
+
+def id_registro(x):
+    """
+    Chave EXATA do registro — o dicionario inteiro.
+
+    Nao use campos de id aqui. Medido em 25/08/2026: no historico financeiro,
+    a COMMISSION e o REALIZED_PNL da mesma operacao compartilham tranId e
+    tradeId, e o funding vem com tradeId vazio. Deduplicar por esses campos
+    apagava um lado de cada par e somava todo o funding num registro so.
+    As fatias de tempo nao se sobrepoem, entao isto so protege as bordas.
+    """
+    return tuple(sorted((k, str(v)) for k, v in x.items()))
+
+
 def main():
     ap = argparse.ArgumentParser(description="Auditoria da conta na Binance Futures")
     ap.add_argument("--dias", type=int, default=7, help="Janela em dias (padrao 7)")
@@ -49,6 +112,32 @@ def main():
     ex = FuturesExecutor(testnet=not a.real, dry_run=True)   # dry_run: so leitura
     ex.conectar()
 
+    # ── 0. Saldo — a pergunta que a ferramenta nunca respondia ──────────────
+    print("\n" + "=" * 78)
+    print("  SALDO DA CONTA — agora")
+    print("=" * 78)
+    try:
+        cont = ex.api.futures_account()
+        saldo = float(cont["totalWalletBalance"])
+        naorealizado = float(cont["totalUnrealizedProfit"])
+        margem = float(cont["totalMarginBalance"])
+        print(f"\n  Carteira (fechado)      : ${saldo:>12,.2f}")
+        print(f"  Posicoes abertas (PnL)  : ${naorealizado:>+12,.2f}")
+        print(f"  {'-'*40}")
+        print(f"  TOTAL                   : ${margem:>12,.2f}")
+        abertas = [pp for pp in cont.get("positions", [])
+                   if abs(float(pp.get("positionAmt", 0))) > 0]
+        if abertas:
+            print(f"\n  {len(abertas)} posicao(oes) aberta(s):")
+            for pp in abertas:
+                print(f"    {pp['symbol']:<10} qtd {float(pp['positionAmt']):>+12.4f} "
+                      f"| entrada {float(pp['entryPrice']):>12,.4f} "
+                      f"| PnL ${float(pp['unrealizedProfit']):>+9.2f}")
+        else:
+            print("\n  Nenhuma posicao aberta.")
+    except Exception as e:
+        print(f"  [aviso] nao consegui ler o saldo: {e}")
+
     # ── 1. Ordens criadas no periodo ────────────────────────────────────────
     print("\n" + "=" * 78)
     print(f"  ORDENS NA CORRETORA — ultimos {a.dias} dias")
@@ -57,7 +146,8 @@ def main():
     todas = []
     for sym in simbolos:
         try:
-            todas += ex.api.futures_get_all_orders(symbol=sym, startTime=inicio, limit=500)
+            todas += pagina_tudo(ex.api.futures_get_all_orders, inicio,
+                                 campo_ts="time", limite=500, symbol=sym)
         except Exception as e:
             print(f"  [aviso] {sym}: {e}")
 
@@ -67,7 +157,8 @@ def main():
     condicionais = []
     for sym in simbolos:
         try:
-            r = ex.api.futures_get_all_algo_orders(symbol=sym, startTime=inicio, limit=100)
+            r = pagina_tudo(ex.api.futures_get_all_algo_orders, inicio,
+                            campo_ts="bookTime", limite=100, symbol=sym)
         except Exception as e:
             print(f"  [aviso] condicionais de {sym}: {e}")
             continue
@@ -180,7 +271,8 @@ def main():
     print("=" * 78)
 
     try:
-        renda = ex.api.futures_income_history(startTime=inicio, limit=1000)
+        renda = pagina_tudo(ex.api.futures_income_history, inicio,
+                            campo_ts="time", limite=1000)
     except Exception as e:
         print(f"  [aviso] nao foi possivel ler o historico financeiro: {e}")
         renda = []
@@ -214,7 +306,8 @@ def main():
     fills = []
     for sym in simbolos:
         try:
-            fills += ex.api.futures_account_trades(symbol=sym, startTime=inicio, limit=500)
+            fills += pagina_tudo(ex.api.futures_account_trades, inicio,
+                                 campo_ts="time", limite=500, symbol=sym)
         except Exception as e:
             print(f"  [aviso] {sym}: {e}")
     fills.sort(key=lambda t: t["time"])
