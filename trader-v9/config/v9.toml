@@ -1,0 +1,14 @@
+# Todo numero que alguem queira mexer mora aqui.
+[universo]
+# Sprint 1: os 6 de sempre — base comparavel com o historico das V1..V8.
+# Escalar para 30 ativos e mudar esta linha.
+ativos = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "AVAXUSDT"]
+
+[indicadores]
+rsi = 14
+macd_rapida = 12
+macd_lenta = 26
+macd_sinal = 9
+bb_n = 20
+bb_k = 2.0
+atr = 14
