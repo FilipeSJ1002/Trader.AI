@@ -206,6 +206,28 @@ class Historico:
             _grosseiras=grosseiras,
         )
 
+    def barras_entre(self, i_ini: int, i_fim: int) -> tuple[np.ndarray, ...]:
+        """
+        (instantes, maximas, minimas) do trecho [i_ini, i_fim].
+
+        Existe para a corretora varrer gatilhos de stop e alvo minuto a minuto
+        entre dois ciclos. E o unico jeito legitimo de alguem de fora ler barras
+        cruas daqui — sem isto, o replay acabaria mexendo nos atributos privados
+        e o encapsulamento viraria enfeite.
+        """
+        i_ini, i_fim = max(i_ini, 0), min(i_fim, len(self._ts) - 1)
+        if i_fim < i_ini:
+            vazio = np.empty(0)
+            return vazio, vazio, vazio
+        fatia = slice(i_ini, i_fim + 1)
+        return (self._ts[fatia], self._cols["maxima"][fatia],
+                self._cols["minima"][fatia])
+
+    @property
+    def instantes(self) -> np.ndarray:
+        """A linha do tempo completa. Somente leitura."""
+        return self._ts
+
     def indice_de(self, quando: datetime) -> int:
         """Indice da ultima barra em ou antes de `quando`."""
         i = int(np.searchsorted(self._ts, np.datetime64(quando, "us"),
