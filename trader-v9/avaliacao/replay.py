@@ -67,13 +67,20 @@ def replay(
     ate: datetime,
     a_cada: int = 15,
     referencia: str | None = None,
+    fase: int = 0,
 ) -> Resultado:
     """
     Percorre o tempo chamando Oraculo, Motor e Corretora.
 
     `motores` mapeia Regime.BULL e Regime.BEAR aos especialistas.
     `referencia` e o ativo cujo contexto o Oraculo le (padrao: o primeiro).
+    `fase` desloca a grade de avaliacao dentro do ciclo: com a_cada=15, a fase
+    0 avalia :00/:15/:30/:45 e a fase 7 avalia :07/:22/:37/:52. E uma escolha
+    sem significado economico nenhum — por isso avaliacao/robustez.py percorre
+    todas elas: um resultado que dependa da fase e sorte, nao estrategia.
     """
+    if not 0 <= fase < a_cada:
+        raise ValueError(f"fase precisa estar em [0, {a_cada}): {fase}")
     simbolos = sorted(historicos)
     if not simbolos:
         raise ValueError("nenhum historico fornecido")
@@ -82,7 +89,7 @@ def replay(
         raise ValueError(f"referencia '{referencia}' nao esta nos historicos")
 
     # Linha do tempo comum: so instantes que existem em TODOS os ativos.
-    passos = _linha_do_tempo(historicos, de, ate, a_cada)
+    passos = _linha_do_tempo(historicos, de, ate, a_cada, fase)
     if len(passos) < 2:
         raise ValueError(f"periodo curto demais: {len(passos)} passos")
 
@@ -165,7 +172,8 @@ def replay(
 
 
 def _linha_do_tempo(
-    historicos: dict[str, Historico], de: datetime, ate: datetime, a_cada: int
+    historicos: dict[str, Historico], de: datetime, ate: datetime,
+    a_cada: int, fase: int = 0
 ) -> list[datetime]:
     """
     Instantes de ciclo presentes em TODOS os ativos.
@@ -190,5 +198,5 @@ def _linha_do_tempo(
     # epoca como ancora, pedir 2021-2026 ou 2025-2026 avalia exatamente os
     # mesmos relogios no trecho em comum.
     minutos = comum.astype("datetime64[m]").astype(np.int64)
-    alinhados = comum[minutos % a_cada == 0]
+    alinhados = comum[minutos % a_cada == fase % a_cada]
     return [t.astype("datetime64[us]").astype(datetime) for t in alinhados]
