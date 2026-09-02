@@ -37,6 +37,58 @@ from nucleo.tipos import Regime
 from oraculo.teto import OraculoPerfeito
 
 
+class OraculoLento(OraculoPerfeito):
+    """
+    Como o OraculoPerfeito, mas so troca de lado a cada `passo` dias.
+
+    Existe porque o alvo de 56% da Sprint 1 foi calibrado para um oraculo
+    DIARIO. Um oraculo mais lento vira menos vezes, paga menos taxa de virada,
+    e o ponto de empate dele e outro. Comparar a acuracia de um classificador
+    de 3 dias contra o alvo de um oraculo de 1 dia seria comparar com a regua
+    errada.
+    """
+
+    def __init__(self, historicos, passo: int = 3, acuracia: float = 1.0,
+                 semente: int = 0, limiar_fora: float = 0.0):
+        import numpy as _np
+        super().__init__(historicos, limiar_fora=limiar_fora)
+        self.nome = f"lento({passo}d, {acuracia:.0%})"
+        self.passo = int(passo)
+        self.acuracia = float(acuracia)
+        self._rng = _np.random.default_rng(semente)
+        self._blocos: dict[int, "Regime"] = {}
+        self._dias = sorted(self._mapa)
+        self._indice = {d: i for i, d in enumerate(self._dias)}
+
+    def regime(self, visao):
+        import numpy as _np
+        dia = visao.ts.date()
+        i = self._indice.get(dia)
+        if i is None:
+            return Regime.FORA
+        bloco = i // self.passo
+        if bloco in self._blocos:
+            return self._blocos[bloco]
+
+        # A verdade do bloco: a direcao dominante dos dias que ele cobre.
+        fatia = self._dias[bloco * self.passo:(bloco + 1) * self.passo]
+        votos = [self._mapa[d] for d in fatia if self._mapa[d] is not Regime.FORA]
+        if not votos:
+            verdade = Regime.FORA
+        else:
+            altas = sum(v is Regime.BULL for v in votos)
+            verdade = Regime.BULL if altas * 2 > len(votos) else Regime.BEAR
+
+        if verdade is Regime.FORA:
+            escolha = Regime.FORA
+        elif self._rng.random() < self.acuracia:
+            escolha = verdade
+        else:
+            escolha = Regime.BEAR if verdade is Regime.BULL else Regime.BULL
+        self._blocos[bloco] = escolha
+        return escolha
+
+
 class OraculoRuidoso(OraculoPerfeito):
     """Acerta a direcao do dia com probabilidade `acuracia`."""
 

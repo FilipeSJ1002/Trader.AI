@@ -33,12 +33,13 @@ from execucao.risco import Risco
 from motores.bear import MotorBear
 from motores.bull import MotorBull
 from nucleo.tipos import Regime
-from oraculo.ruidoso import OraculoRuidoso
+from oraculo.ruidoso import OraculoLento, OraculoRuidoso
 
-NIVEIS = [0.50, 0.55, 0.60, 0.65, 0.70, 0.80, 0.90, 1.00]
+NIVEIS = [0.50, 0.52, 0.54, 0.56, 0.58, 0.60, 0.65, 0.70]
 SEMENTES = [1, 2, 3]
 FASES = [0, 7]
 DE, ATE = datetime(2023, 1, 1), datetime(2026, 7, 25)
+PASSO = 3   # regime de 3 dias — o horizonte com sinal real (t=3,40)
 CAPITAL = 5000.0
 
 
@@ -50,7 +51,7 @@ def main() -> None:
     ref = comprar_e_segurar(h, DE, ATE, CAPITAL)
 
     total = len(NIVEIS) * len(SEMENTES) * len(FASES)
-    print(f"{DE:%Y-%m-%d} a {ATE:%Y-%m-%d} | {total} rodadas "
+    print(f"REGIME DE {PASSO} DIAS | {DE:%Y-%m-%d} a {ATE:%Y-%m-%d} | {total} rodadas "
           f"({len(NIVEIS)} niveis x {len(SEMENTES)} sementes x "
           f"{len(FASES)} fases)")
     print(f"Comprar e segurar no periodo: {ref.retorno*100:+.1f}%\n", flush=True)
@@ -69,7 +70,8 @@ def main() -> None:
                 r = replay(
                     h,
                     {Regime.BULL: MotorBull(), Regime.BEAR: MotorBear()},
-                    OraculoRuidoso(h, acuracia=p, semente=semente),
+                    OraculoLento(h, passo=PASSO, acuracia=p,
+                                 semente=semente),
                     c, Risco(), DE, ATE, a_cada=15,
                     referencia=ativos[0], fase=fase,
                 )
