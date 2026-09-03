@@ -221,3 +221,18 @@ def test_comprar_e_segurar_bate_com_a_variacao_do_preco(mercado):
     ]) - 1
     assert m.retorno == pytest.approx(esperado, rel=1e-6)
     assert m.operacoes == 0
+
+
+def test_rebaixamento_nunca_passa_de_cem_por_cento():
+    """
+    Perder mais que tudo nao existe. No instante da quebra o patrimonio chega a
+    ser marcado levemente negativo, e sem o piso a varredura de alavancagem
+    reportava queda de -100,1%.
+    """
+    from avaliacao.replay import Resultado
+
+    r = Resultado(saldo_inicial=1000.0, saldo_final=0.0, fechamentos=[],
+                  curva=[(datetime(2024, 1, 1), 1000.0),
+                         (datetime(2024, 1, 2), 500.0),
+                         (datetime(2024, 1, 3), -5.0)])
+    assert medir(r).rebaixamento == pytest.approx(-1.0)

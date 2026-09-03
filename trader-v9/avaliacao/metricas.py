@@ -53,7 +53,11 @@ def medir(res: Resultado) -> Metricas:
 
     if len(curva):
         pico = np.maximum.accumulate(curva)
-        rebaixamento = float((curva / pico - 1.0).min())
+        # Piso em -100%: o patrimonio chega a registrar valor levemente
+        # negativo no instante da quebra (a posicao e marcada a mercado antes
+        # de a conta ser declarada morta), o que produzia leituras como
+        # -100,1%. Perder mais que tudo nao existe.
+        rebaixamento = float(max((curva / pico - 1.0).min(), -1.0))
     else:
         rebaixamento = 0.0
 

@@ -155,18 +155,28 @@ def replay(
                                            for s in simbolos}))
             )
 
+        # Fecha o que sobrou, ao ultimo preco conhecido.
+        ultimo = passos[-1]
+        for pos in list(corretora.posicoes()):
+            i = historicos[pos.symbol].indice_de(ultimo)
+            corretora.fechar(pos, "FIM",
+                             preco=historicos[pos.symbol].em(i).fechamento,
+                             quando=ultimo)
+        res.saldo_final = corretora.saldo
+
     except SemSaldo as e:
+        # A conta acabou. Uma corretora real liquida a posicao nesse instante;
+        # ela nao sobrevive para correr ate o fim do periodo.
+        #
+        # Medido em 02/09/2026: sem este corte, o fechamento final era
+        # executado mesmo apos a quebra, e uma posicao vencedora aberta
+        # RESSUSCITAVA a conta. A varredura de alavancagem chegou a reportar
+        # "6 de 6 contas zeradas" com melhor rodada de +168,3% — impossivel.
+        # Quebrar e o unico desfecho irreversivel do sistema, e o codigo tem
+        # de trata-lo como tal.
         res.parou_por = f"conta zerada: {e}"
+        res.saldo_final = 0.0
 
-    # Fecha o que sobrou, ao ultimo preco conhecido.
-    ultimo = passos[-1]
-    for pos in list(corretora.posicoes()):
-        i = historicos[pos.symbol].indice_de(ultimo)
-        corretora.fechar(pos, "FIM",
-                         preco=historicos[pos.symbol].em(i).fechamento,
-                         quando=ultimo)
-
-    res.saldo_final = corretora.saldo
     res.fechamentos = list(corretora.fechamentos)
     return res
 

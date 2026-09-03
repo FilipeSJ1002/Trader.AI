@@ -303,3 +303,27 @@ def test_corretora_que_nao_protege_faz_o_replay_fechar_na_hora(mercado):
     assert res.fechamentos
     assert all(f.causa == "SEM_PROTECAO" for f in res.fechamentos)
     assert not c.posicoes()
+
+
+def test_conta_zerada_e_terminal(mercado):
+    """
+    Quebrar e irreversivel: nenhuma posicao aberta pode ressuscitar a conta.
+
+    Sem este corte, o fechamento final rodava mesmo apos a quebra e uma posicao
+    vencedora devolvia saldo — a varredura de alavancagem chegou a reportar
+    "6 de 6 contas zeradas" com melhor rodada de +168,3%.
+    """
+    class CorretoraFragil(CorretoraPapel):
+        """Zera na primeira operacao fechada, deixando outra aberta."""
+        def fechar(self, posicao, causa, preco=None, quando=None):
+            saida = super().fechar(posicao, causa, preco, quando)
+            self._saldo = -1.0
+            raise SemSaldo("quebrou de proposito")
+
+    c = CorretoraFragil(saldo_inicial=5000.0)
+    res = replay(mercado, {Regime.BULL: MotorBull(), Regime.BEAR: MotorBear()},
+                 OraculoFixo(Regime.BULL), c, Risco(),
+                 datetime(2024, 1, 20), datetime(2024, 1, 30))
+    assert "zerada" in res.parou_por
+    assert res.saldo_final == 0.0
+    assert res.retorno == pytest.approx(-1.0)
