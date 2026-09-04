@@ -1,0 +1,12 @@
+[Unit]
+Description=Roda a sobreposicao V9 diariamente
+
+[Timer]
+# 03:30 UTC — meia hora depois do coletor, para nao disputar rede.
+# A decisao e por bloco de 3 dias; rodar diariamente so reafirma o alvo,
+# e o ajuste e idempotente: sem mudanca de regime, nenhuma ordem e enviada.
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

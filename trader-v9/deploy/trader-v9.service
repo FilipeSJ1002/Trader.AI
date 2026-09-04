@@ -1,0 +1,13 @@
+[Unit]
+Description=Trader.AI V9 — sobreposicao (comprado ou caixa)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/trader-ai/trader-v9
+Environment=PYTHONPATH=/home/ubuntu/trader-ai/trader-v9
+ExecStart=/home/ubuntu/trader-ai/venv/bin/python -m app.vivo --armar
+StandardOutput=journal
+StandardError=journal
