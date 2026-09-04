@@ -1,0 +1,12 @@
+# Dependencias da V9. Instale no servidor com:
+#   ~/trader-ai/venv/bin/pip install -r trader-v9/requirements-v9.txt
+#
+# As versoes NAO sao fixadas de proposito: o modelo e treinado na propria
+# maquina que o usa (python -m app.treinar_oraculo), entao nao ha o
+# acoplamento de pickle entre versoes que quebrou o primeiro deploy.
+polars
+scikit-learn
+joblib
+python-binance
+python-dotenv
+numpy

@@ -32,6 +32,7 @@ from datetime import datetime, timedelta
 
 import joblib
 import numpy as np
+import sklearn
 import polars as pl
 
 from dados.visao import Historico
@@ -111,6 +112,11 @@ def treinar(
         "acuracia_medida": 0.5369,      # de app/treinar.py, fora da amostra
         "erro_medido": 0.0090,
         "limiar_necessario": 0.58,      # de app/sobreposicao.py
+        # Modelo em pickle NAO atravessa versoes do scikit-learn: em
+        # 04/09/2026 um modelo treinado na 1.7.2 quebrou ao ser carregado na
+        # 1.9.0 do servidor, com "ModuleNotFoundError: No module named
+        # '_loss'". Gravar a versao permite avisar em vez de estourar.
+        "sklearn": sklearn.__version__,
     }, caminho)
     return {"caminho": caminho, "dias": len(y), "colunas": len(colunas)}
 
@@ -130,7 +136,23 @@ class OraculoTreinado:
             raise FileNotFoundError(
                 f"{caminho} nao existe. Rode: python -m app.treinar_oraculo"
             )
-        d = joblib.load(caminho)
+        try:
+            d = joblib.load(caminho)
+        except Exception as e:
+            raise SystemExit(
+                "Nao consegui carregar o modelo.\n\n  arquivo : {caminho}\n  erro    : {tipo}: {erro}\n\n  Causa provavel: o modelo foi gravado com uma versao de scikit-learn\n  diferente da instalada aqui ({versao}). Modelo em pickle nao\n  atravessa versoes — em 04/09/2026 um treinado na 1.7.2 quebrou ao\n  ser carregado na 1.9.0, com ModuleNotFoundError: '_loss'.\n\n  Solucao: treine NESTA maquina, com os dados que ja estao em disco:\n      PYTHONPATH=. python -m app.treinar_oraculo".format(
+                    caminho=caminho, tipo=type(e).__name__, erro=e,
+                    versao=sklearn.__version__,
+                )
+            ) from e
+
+        gravado = d.get("sklearn")
+        if gravado and gravado != sklearn.__version__:
+            print(f"[AVISO] modelo gravado com scikit-learn {gravado}, "
+                  f"rodando na {sklearn.__version__}. Se os resultados "
+                  f"parecerem estranhos, retreine: "
+                  f"PYTHONPATH=. python -m app.treinar_oraculo")
+
         self.nome = f"treinado({d['horizonte']}d)"
         self._modelo = d["modelo"]
         self._colunas = d["colunas"]

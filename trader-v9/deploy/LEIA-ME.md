@@ -6,7 +6,7 @@ treinar no servidor.
 ## 1. Dependências
 
     cd ~/trader-ai
-    ./venv/bin/pip install polars scikit-learn joblib
+    ./venv/bin/pip install -r trader-v9/requirements-v9.txt
 
 ## 2. Semear o histórico (uma vez, ~10 min)
 
@@ -16,18 +16,25 @@ diárias, então é preciso baixar ~260 dias:
     cd ~/trader-ai/trader-v9
     PYTHONPATH=. ../venv/bin/python -m app.semear
 
-## 3. Testar sem enviar ordem
+## 3. Treinar o modelo NESTA máquina
+
+Modelo em pickle não atravessa versões do scikit-learn. Treinar aqui, com os
+dados que o passo 2 baixou, elimina o acoplamento de vez (leva ~1 min):
+
+    PYTHONPATH=. ../venv/bin/python -m app.treinar_oraculo
+
+## 4. Testar sem enviar ordem
 
     PYTHONPATH=. ../venv/bin/python -m app.vivo
 
 Confira no log: a defasagem dos dados deve ficar em minutos, e a linha de
 regime deve dizer BULL ou BEAR com a probabilidade.
 
-## 4. Armar
+## 5. Armar
 
     PYTHONPATH=. ../venv/bin/python -m app.vivo --armar
 
-## 5. Agendar
+## 6. Agendar
 
     sudo cp deploy/trader-v9.service deploy/trader-v9.timer /etc/systemd/system/
     sudo systemctl daemon-reload
