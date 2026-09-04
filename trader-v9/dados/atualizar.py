@@ -28,6 +28,8 @@ import numpy as np
 import polars as pl
 
 LIMITE_POR_CHAMADA = 1500        # maximo de candles por requisicao na Binance
+MINUTOS_POR_INTERVALO = {"1m": 1, "5m": 5, "15m": 15, "1h": 60,
+                         "4h": 240, "1d": 1440}
 PAUSA = 0.25                     # respeita o limite de requisicoes
 
 
@@ -40,16 +42,23 @@ def defasagem(historico) -> timedelta:
     return _agora() - historico.fim
 
 
-def baixar_desde(api, symbol: str, inicio: datetime,
+def baixar_desde(api, symbol: str, inicio: datetime, intervalo: str = "1m",
                  log=print) -> pl.DataFrame | None:
-    """Candles de 1 minuto entre `inicio` e agora, paginados."""
+    """
+    Candles entre `inicio` e agora, paginados.
+
+    O intervalo padrao e 1m por compatibilidade com os parquets de
+    pesquisa. Para operacao use "4h": as features do oraculo saem so das
+    visoes diaria e de 4h, e o resultado e identico com 240x menos dados.
+    """
+    passo_ms = MINUTOS_POR_INTERVALO[intervalo] * 60_000
     cursor = int(inicio.replace(tzinfo=timezone.utc).timestamp() * 1000)
     fim = int(_agora().replace(tzinfo=timezone.utc).timestamp() * 1000)
     linhas = []
 
     while cursor < fim:
         try:
-            lote = api.futures_klines(symbol=symbol, interval="1m",
+            lote = api.futures_klines(symbol=symbol, interval=intervalo,
                                       startTime=cursor,
                                       limit=LIMITE_POR_CHAMADA)
         except Exception as e:
@@ -58,7 +67,7 @@ def baixar_desde(api, symbol: str, inicio: datetime,
         if not lote:
             break
         linhas += lote
-        proximo = int(lote[-1][0]) + 60_000
+        proximo = int(lote[-1][0]) + passo_ms
         if proximo <= cursor:
             break
         cursor = proximo
@@ -79,29 +88,53 @@ def baixar_desde(api, symbol: str, inicio: datetime,
     }).unique(subset="ts", keep="last").sort("ts")
 
 
+def passo_do_historico(historico) -> str:
+    """
+    Descobre o intervalo das barras pelo espacamento mediano.
+
+    O mesmo codigo serve para os parquets de pesquisa (1 minuto) e para os
+    de operacao (4 horas), sem que ninguem precise configurar isso.
+    """
+    ts = historico.instantes
+    if len(ts) < 3:
+        return "1m"
+    minutos = int(np.median(np.diff(ts[-200:]).astype("timedelta64[m]")
+                            .astype(int)))
+    for nome, m in MINUTOS_POR_INTERVALO.items():
+        if m == minutos:
+            return nome
+    return "1m"
+
+
 def atualizar(api, fonte, ativos: list[str], cfg: dict | None = None,
-              tolerancia_min: int = 30, log=print) -> tuple[dict, bool]:
+              tolerancia_min: int | None = None,
+              log=print) -> tuple[dict, bool]:
     """
     Devolve (historicos atualizados, tudo_em_dia).
 
-    `tudo_em_dia` é False se algum ativo continuar defasado além da tolerância
-    depois da tentativa. Quem chama decide se opera assim.
+    `tolerancia_min` sai do proprio intervalo das barras quando nao e dado:
+    numa base de 4h, uma barra de ate 4h de idade e o normal, nao atraso.
     """
     from dados.visao import Historico
 
     saida, em_dia = {}, True
     for symbol in ativos:
         h = fonte.historico(symbol)
+        intervalo = passo_do_historico(h)
+        tol = timedelta(minutes=(tolerancia_min if tolerancia_min is not None
+                                 else MINUTOS_POR_INTERVALO[intervalo] + 30))
         atraso = defasagem(h)
 
-        if atraso <= timedelta(minutes=tolerancia_min):
-            log(f"  {symbol}: em dia (defasagem {atraso.total_seconds()/60:.0f} min)")
+        if atraso <= tol:
+            log(f"  {symbol}: em dia ({intervalo}, defasagem "
+                f"{atraso.total_seconds()/60:.0f} min)")
             saida[symbol] = h
             continue
 
         log(f"  {symbol}: defasado {atraso.days}d {atraso.seconds//3600}h — "
             f"buscando na corretora...")
-        novo = baixar_desde(api, symbol, h.fim + timedelta(minutes=1), log=log)
+        novo = baixar_desde(api, symbol, h.fim + timedelta(minutes=1),
+                            intervalo=intervalo, log=log)
         if novo is None or novo.is_empty():
             log(f"    [aviso] {symbol}: nada retornado; segue com o arquivo")
             saida[symbol] = h
@@ -125,7 +158,7 @@ def atualizar(api, fonte, ativos: list[str], cfg: dict | None = None,
         saida[symbol] = atualizado
 
         resto = defasagem(atualizado)
-        if resto > timedelta(minutes=tolerancia_min):
+        if resto > tol:
             log(f"    [aviso] {symbol}: ainda defasado "
                 f"{resto.total_seconds()/60:.0f} min apos a atualizacao")
             em_dia = False

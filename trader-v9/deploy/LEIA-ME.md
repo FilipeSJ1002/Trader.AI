@@ -8,13 +8,22 @@ treinar no servidor.
     cd ~/trader-ai
     ./venv/bin/pip install -r trader-v9/requirements-v9.txt
 
-## 2. Semear o histórico (uma vez, ~10 min)
+## 2. Semear o histórico (uma vez, ~1 min)
 
-O servidor não guarda os parquets de preço. As features precisam de 200 barras
-diárias, então é preciso baixar ~260 dias:
+O servidor não guarda os parquets de preço. Baixa 2.600 dias em barras de 4h —
+que é o que as features do oráculo realmente usam:
 
     cd ~/trader-ai/trader-v9
+    rm -f ../data/*_1m.parquet          # descarta a semeadura curta anterior
     PYTHONPATH=. ../venv/bin/python -m app.semear
+
+**Não reduza os 2.600 dias.** Medido em 04/09/2026:
+
+| Janela de treino | Acurácia |
+|---|---|
+| 257 dias | 50,07% (moeda) |
+| 1.000 dias | 52,71% |
+| completo | 53,69% |
 
 ## 3. Treinar o modelo NESTA máquina
 

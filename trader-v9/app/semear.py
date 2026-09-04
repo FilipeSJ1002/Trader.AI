@@ -7,8 +7,20 @@ O servidor não guarda os parquets de preço — eles ocupam gigabytes e existem
 para pesquisa, não para operação. Mas as features precisam de 200 barras
 diárias (a SMA200), o que significa ~260 dias de histórico.
 
-Este script baixa esse mínimo e grava em data/, uma vez. Depois disso,
-dados/atualizar.py completa incrementalmente a cada execução.
+Por que barras de 4 horas, e não de 1 minuto
+--------------------------------------------
+As features do oráculo saem exclusivamente das visões diária e de 4h — a série
+fina nunca é lida. Verificado em 04/09/2026: reconstruindo o histórico a partir
+de barras de 4h, as 16 features saem IDÊNTICAS (diferença relativa zero), com
+240 vezes menos dados. Em 1 minuto, 2.600 dias levariam 3,7 horas de download;
+em 4h, são 11 requisições por ativo.
+
+Isso importa porque a alternativa — semear pouco — não é aceitável: treinar com
+257 dias derruba a acurácia para 50,07%, que é o mesmo que jogar moeda. Com o
+histórico completo ela é 53,69%.
+
+Este script grava em data/, uma vez. Depois disso, dados/atualizar.py completa
+incrementalmente a cada execução, no mesmo intervalo.
 
 Uso:
   python -m app.semear              # 260 dias, o minimo para a SMA200
@@ -30,7 +42,8 @@ from dotenv import load_dotenv
 from dados.atualizar import baixar_desde
 from dados.fonte import RAIZ_PADRAO, ler_config
 
-MINIMO_DIAS = 260      # SMA200 diaria + folga de aquecimento
+MINIMO_DIAS = 2600     # o suficiente para o modelo valer 53,69%
+INTERVALO = "4h"       # ver a nota no cabecalho
 
 
 def main() -> None:
@@ -39,12 +52,15 @@ def main() -> None:
 
     ap = argparse.ArgumentParser(prog="v9-semear")
     ap.add_argument("--dias", type=int, default=MINIMO_DIAS)
+    ap.add_argument("--intervalo", default=INTERVALO,
+                    choices=["1m", "15m", "1h", "4h"])
     ap.add_argument("--real", action="store_true")
     a = ap.parse_args()
 
     if a.dias < MINIMO_DIAS:
-        print(f"AVISO: {a.dias} dias e menos que os {MINIMO_DIAS} necessarios "
-              f"para a SMA200. As features vao sair incompletas.")
+        print(f"AVISO: {a.dias} dias. Medido em 04/09/2026, treinar com 257\n"
+              f"dias derruba a acuracia para 50,07% — moeda. Com o historico\n"
+              f"completo ela e 53,69%. Use pelo menos {MINIMO_DIAS}.")
 
     from execucao.carteira import CarteiraBinance
     cfg = ler_config()
@@ -55,8 +71,9 @@ def main() -> None:
 
     os.makedirs(RAIZ_PADRAO, exist_ok=True)
     inicio = datetime.utcnow() - timedelta(days=a.dias)
-    print(f"\nBaixando {a.dias} dias de {len(ativos)} ativos "
-          f"(desde {inicio:%Y-%m-%d}) -> {RAIZ_PADRAO}\n", flush=True)
+    print(f"\nBaixando {a.dias} dias em barras de {a.intervalo}, "
+          f"{len(ativos)} ativos (desde {inicio:%Y-%m-%d}) -> {RAIZ_PADRAO}\n",
+          flush=True)
 
     for symbol in ativos:
         destino = os.path.join(RAIZ_PADRAO, f"{symbol}_1m.parquet")
@@ -67,6 +84,7 @@ def main() -> None:
 
         t0 = time.time()
         df = baixar_desde(carteira.api, symbol, inicio,
+                          intervalo=a.intervalo,
                           log=lambda m: print(f"  {m}", flush=True))
         if df is None or df.is_empty():
             print(f"  {symbol}: FALHOU — nada retornado")
