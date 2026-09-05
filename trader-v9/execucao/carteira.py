@@ -38,6 +38,7 @@ import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import ROUND_DOWN, Decimal
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__)))))
@@ -69,7 +70,7 @@ class CarteiraBinance:
         self.armado = armado
         self.log = log
         self.api: Client | None = None
-        self._filtros: dict[str, tuple[float, float]] = {}
+        self._filtros: dict[str, dict[str, float]] = {}
 
     # ── ligação ────────────────────────────────────────────────────────────
     def conectar(self) -> None:
@@ -90,14 +91,19 @@ class CarteiraBinance:
 
         info = self.api.futures_exchange_info()
         for s in info["symbols"]:
-            if s["symbol"] in self.ativos:
-                passo = tick = 0.0
-                for f in s["filters"]:
-                    if f["filterType"] == "LOT_SIZE":
-                        passo = float(f["stepSize"])
-                    elif f["filterType"] == "PRICE_FILTER":
-                        tick = float(f["tickSize"])
-                self._filtros[s["symbol"]] = (passo, tick)
+            if s["symbol"] not in self.ativos:
+                continue
+            # `passo` fica como TEXTO de proposito: Decimal("0.001") e exato,
+            # Decimal(0.001) herda o erro do float e reintroduz o -1111.
+            f_ = {"passo": "1", "min_qtd": 0.0, "min_notional": 0.0}
+            for f in s["filters"]:
+                if f["filterType"] == "LOT_SIZE":
+                    f_["passo"] = f["stepSize"]
+                    f_["min_qtd"] = float(f["minQty"])
+                elif f["filterType"] in ("MIN_NOTIONAL", "NOTIONAL"):
+                    f_["min_notional"] = float(
+                        f.get("notional") or f.get("minNotional") or 0.0)
+            self._filtros[s["symbol"]] = f_
 
         faltando = [a for a in self.ativos if a not in self._filtros]
         if faltando:
@@ -126,16 +132,39 @@ class CarteiraBinance:
         return saida
 
     def _arredondar(self, symbol: str, qtd: float) -> float:
-        passo, _ = self._filtros[symbol]
+        """
+        Trunca a quantidade para um multiplo exato do passo do ativo.
+
+        Em Decimal, nao em float: math.floor(0.0096/0.001)*0.001 devolve
+        0.009000000000000001, e a Binance responde APIError -1111
+        "Precision is over the maximum defined for this asset". Foi o que
+        derrubou a primeira ordem armada, em 05/09/2026.
+        """
+        passo = Decimal(self._filtros[symbol]["passo"])
         if passo <= 0:
             return qtd
-        return math.floor(abs(qtd) / passo) * passo * (1 if qtd >= 0 else -1)
+        n = (Decimal(str(abs(qtd))) / passo).to_integral_value(ROUND_DOWN)
+        return float(n * passo) * (1 if qtd >= 0 else -1)
 
     # ── escrita ────────────────────────────────────────────────────────────
-    def _ordem(self, symbol: str, lado: str, qtd: float) -> bool:
+    def _ordem(self, symbol: str, lado: str, qtd: float,
+               preco: float | None = None) -> bool:
         """Envia uma ordem a mercado e CONFERE que ela existe na corretora."""
         qtd = abs(self._arredondar(symbol, qtd))
         if qtd <= 0:
+            return True
+
+        # Os minimos da corretora. Sem esta checagem, uma ordem pequena
+        # demais volta como erro de API em vez de um pulo silencioso e
+        # explicado, que e o comportamento correto: nao ha o que fazer.
+        f = self._filtros[symbol]
+        if qtd < f["min_qtd"]:
+            self.log(f"    {symbol}: {qtd} abaixo da quantidade minima "
+                     f"({f['min_qtd']}) — sem ordem")
+            return True
+        if preco and f["min_notional"] and qtd * preco < f["min_notional"]:
+            self.log(f"    {symbol}: ${qtd * preco:,.2f} abaixo do minimo de "
+                     f"${f['min_notional']:,.2f} — sem ordem")
             return True
 
         if not self.armado:
@@ -183,8 +212,9 @@ class CarteiraBinance:
             self.log("  Alvo: CAIXA. Vendendo tudo.")
             ok = True
             for p in abertas.values():
-                ok &= self._ordem(p.symbol, "SELL" if p.quantidade > 0 else "BUY",
-                                  p.quantidade)
+                ok &= self._ordem(p.symbol,
+                                  "SELL" if p.quantidade > 0 else "BUY",
+                                  p.quantidade, preco=p.preco)
             return ok
 
         # Exposto: peso igual entre os ativos.
@@ -207,7 +237,8 @@ class CarteiraBinance:
                 continue
 
             qtd = diferenca / preco
-            ok &= self._ordem(symbol, "BUY" if qtd > 0 else "SELL", qtd)
+            ok &= self._ordem(symbol, "BUY" if qtd > 0 else "SELL", qtd,
+                              preco=preco)
         return ok
 
     def configurar_alavancagem(self) -> None:
