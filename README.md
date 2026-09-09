@@ -1,62 +1,135 @@
 
 #  TRADER.AI
 
-> **Sistema de Trading Algorítmico Autônomo Baseado em Análise Técnica Quantitativa e Redes Neurais.**
+> **Sistema de negociação algorítmica autônoma para criptoativos, e o instrumento de medição construído para avaliá-lo.**
 >
-> *Projeto de Trabalho de Conclusão de Curso (TCC) - Ciência da Computação.*
+> *Trabalho de Conclusão de Curso — Ciência da Computação.*
 
-![Status](https://img.shields.io/badge/Status-Etapa%207%20(V6%20%7C%20Abla%C3%A7%C3%A3o%20%26%20Calibra%C3%A7%C3%A3o)-blue?style=for-the-badge)
-![Python](https://img.shields.io/badge/Python-3.10+-yellow?style=for-the-badge&logo=python&logoColor=white)
-![PyTorch](https://img.shields.io/badge/IA-PyTorch%20%7C%20BiLSTM%20%2B%20Attention-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white)
-![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)
-![WebSockets](https://img.shields.io/badge/Data-WebSockets%20%7C%20Binance-F3BA2F?style=for-the-badge&logo=binance&logoColor=black)
+![Status](https://img.shields.io/badge/Status-V9%20em%20opera%C3%A7%C3%A3o%20(testnet)-2E7D5B?style=for-the-badge)
+![Python](https://img.shields.io/badge/Python-3.12-yellow?style=for-the-badge&logo=python&logoColor=white)
+![Testes](https://img.shields.io/badge/Testes-111%20passando-2E7D5B?style=for-the-badge)
+![Dados](https://img.shields.io/badge/Dados-Polars%20%7C%20Binance-F3BA2F?style=for-the-badge&logo=binance&logoColor=black)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 
 ---
 
-##  Visão Geral do Projeto
+##  O que este projeto é — e o que ele não é
 
-O **TRADER.AI** é uma solução de software desenvolvida para automatizar o processo de tomada de decisão no mercado de criptoativos.
+Nove gerações de sistemas de negociação foram construídas e avaliadas entre 2025 e 2026.
+A conclusão do trabalho, sustentada por medições reproduzíveis, é dupla:
 
-Diferente de sistemas tradicionais, esta inteligência quantitativa utiliza uma arquitetura modular que integra **Estratégias de Confluência** (união de múltiplos indicadores técnicos) e modelos de **Deep Learning** para mitigar o viés emocional humano e explorar ineficiências de mercado em operações 24/7.
+**Existe sinal preditivo real.** O classificador de regime alcança **53,69% ± 0,90** de
+acurácia balanceada na direção do mercado em horizonte de três dias (estatística t = 3,40),
+sob validação *walk-forward* com embargo de 210 dias. É o primeiro resultado preditivo do
+projeto a sobreviver a esse critério.
 
-O projeto encontra-se na **Etapa 7 (V6)**, que consolida a **estratégia híbrida bidirecional**: os sinais matemáticos clássicos (RSI, MACD, Bandas de Bollinger) definem *quando* operar, enquanto uma rede neural **BiLSTM + Attention** define *em qual direção* — comprando em mercados de alta (LONG) e vendendo a descoberto em mercados de queda (SHORT), com alavancagem proporcional à confiança do modelo.
+**E ele é insuficiente.** O limiar para igualar a estratégia passiva de comprar e manter,
+medido para a mesma arquitetura, é de **58%**. O sistema resultante gera retorno positivo e
+inferior ao da alternativa que não requer sistema algum.
+
+> **O Trader.AI não é um sistema de geração de lucro.** A evidência acumulada em nove etapas
+> de avaliação indica que preço e volume, isoladamente, não sustentam essa finalidade no
+> universo e no horizonte investigados. O que se construiu, e que se oferece como
+> contribuição, é um **instrumento de medição**.
 
 ---
 
-##  Arquitetura da Estratégia
+##  As duas contribuições metodológicas
 
-* **Classificador Direcional Neural:** Rede BiLSTM bidirecional com mecanismo de atenção (~2.17M parâmetros, PyTorch) que classifica cada janela de 120 minutos em **QUEDA / NEUTRO / ALTA**. O NEUTRO atua como sinal de "não operar" — essencial para não corroer o capital com taxas.
-* **Estratégia Híbrida V1+V5:** O score de confluência clássico gera o gatilho de entrada; a rede neural confirma a direção via *confiança direcional* (`p_direção / (p_alta + p_queda)`). Só entra quando ambos concordam.
-* **Operações Bidirecionais (LONG + SHORT):** Em regime de alta opera comprado nos *dips*; em regime de queda abre posições vendidas (futuros) e lucra com a desvalorização.
-* **Filtro de Regime Diário:** Média móvel de 24h decide o lado permitido do mercado — elimina compras em tendência de baixa (o erro fatal das versões anteriores) e shorts em tendência de alta.
-* **Gestão de Risco Completa:** Take Profit (+1.0%), Stop Loss (-0.5%, verificado minuto a minuto), saída por sinal técnico contrário, tempo máximo de posição (6h) e simulação de liquidação de futuros.
-* **Alavancagem por Confiança:** 1x a 5x conforme a convicção do modelo (faixas superiores foram testadas e desativadas por descalibração estatística).
-* **Pipeline de Experimentos Automatizado:** Preparação de dados, treino de múltiplos modelos e backtests comparativos executados em sequência sem supervisão.
+Ambos os instrumentos são computacionalmente triviais e estavam ausentes de todo o
+desenvolvimento anterior. Cada um reclassificou um resultado que o projeto considerava
+estabelecido.
 
-###  Resultados do Backtest
+### 1. O referencial do passeio aleatório — estabelece o **piso**
 
-Avaliação *walk-forward* honesta: treino até jun/2025, validação jul–dez/2025, teste 2026 (dados nunca vistos), mais um **holdout virgem** (jun–jul/2026) baixado *depois* de todas as decisões de projeto.
+Quando uma posição é encerrada por barreiras fixas de ganho e perda, um ativo sem
+previsibilidade alguma atinge o alvo numa proporção conhecida das vezes. Sem esse
+referencial, uma taxa de acerto não distingue seleção competente de exposição favorável
+ao mercado.
 
-| Período | Estratégia | Hold de BTC | Vantagem |
-|---|---|---|---|
-| **Teste jan–jul/2026** (*bear market*) | **+2,0%** | −26,8% | **+28,8 p.p.** |
-| **Holdout virgem jun–jul/2026** | **+0,2%** | −13,0% | **+13,2 p.p.** |
-| Validação jul–dez/2025 (lateral) | −2,0% | −18,2% | +16,2 p.p. |
+**O que reclassificou:** o retorno de ~16% obtido em operação real pela V1, que motivou
+todo o projeto, era exposição ao mercado — não capacidade de seleção. Medido sobre 8.702
+operações, o *edge* da estratégia determinística é de 0,000% ± 0,007%.
 
-O *win rate* foi **idêntico (41,2%)** no teste e no holdout virgem — evidência de estabilidade, não de calibração afortunada. **Zero liquidações** em todos os períodos. Taxas de futuros (0,04%/lado) incluídas.
+### 2. O teste de deslocamento da grade — estabelece a **dispersão**
 
-###  A rede neural agrega valor? (estudo de ablação)
+A mesma configuração, sobre os mesmos dados e o mesmo intervalo de datas, alterando
+exclusivamente o minuto em que a grade de avaliação começa:
 
-O experimento mais importante do projeto: rodar a estratégia **idêntica**, com e sem o filtro neural.
+| Início da avaliação | Retorno (jan/2025 – jul/2026) |
+|---|---|
+| 00:00 | **−4,90%** |
+| 00:07 | **+8,24%** |
 
-| Período | COM rede neural | SEM rede neural | Contribuição da IA |
-|---|---|---|---|
-| Validação H2-2025 | −2,0% (55 ops) | −4,1% (232 ops) | **+2,1 p.p.** |
-| **Teste jan–jul/2026** | **+2,0%** (68 ops) | **−6,0%** (246 ops) | **+8,0 p.p.** |
-| Holdout virgem | +0,2% (17 ops) | −0,6% (57 ops) | **+0,8 p.p.** |
+Desvio padrão entre execuções que deveriam ser idênticas: **5,32 a 16,54 pontos
+percentuais** — maior que a diferença entre as configurações que o ranking pretendia ordenar.
 
-**Sem a rede neural o sistema perde dinheiro em todos os períodos.** Ela descarta ~75% dos sinais do componente determinístico e eleva o *win rate* de 36,6% para 41,2% — comprovando empiricamente a tese central do trabalho: **a arquitetura híbrida supera cada componente isolado**.
+**O que reclassificou:** quatorze configurações avaliadas em oito deslocamentos cada, sobre
+5,5 anos. Sob correção de Bonferroni, **nenhuma apresentou retorno positivo distinguível
+de zero**. A única que atravessou o limiar o fez por ser consistentemente negativa.
+
+> **Consequência prática:** resultados de *backtest* reportados como valor único não
+> constituem evidência de desempenho. Isso inclui os resultados das gerações V1 a V7 deste
+> próprio repositório — ver a seção **Trajetória das versões**.
+
+---
+
+##  Estado atual — V9 em operação
+
+Em produção na *testnet* da Binance desde **05/09/2026**, sob agendamento diário
+(`systemd timer`, 03:30 UTC).
+
+| | |
+|---|---|
+| **Estratégia** | Comprado nos 6 ativos em peso igual a 1x, **ou** em caixa |
+| **Decisão** | Uma a cada 3 dias, pelo classificador de regime |
+| **Sem** | Alavancagem, venda a descoberto, *stop*, seleção de ativo |
+| **Universo** | BTC, ETH, SOL, BNB, XRP, AVAX |
+
+Cada ausência corresponde a um mecanismo medido e refutado, ou a um incidente:
+
+| Mecanismo ausente | Motivo |
+|---|---|
+| Alavancagem | De 1x para 2x o retorno **cai**; em 20x, 6 de 6 execuções zeraram a conta |
+| Venda a descoberto | O motor Bear nunca superou o custo de transação em medição alguma |
+| *Stop* na corretora | Falhou em 19/08/2026, deixando posições descobertas |
+| Seleção de ativo | Peso igual venceu toda tentativa de seleção |
+
+### O que esperar
+
+Medido: **~2,2% ao mês**, rebaixamento máximo de 52,8%, **erro de ±60 pontos percentuais** —
+não distinguível de um controle aleatório. Comprar e manter os mesmos ativos rendeu
+**+215,5%** no mesmo período de 3,5 anos, contra +146,1% da sobreposição.
+
+> **O saldo subir não é evidência de que o sistema funciona.** A carteira mantém 98% de
+> exposição: ela acompanha o mercado por construção. A evidência pertinente é a taxa de
+> acerto das decisões de regime, e sua avaliação exige um número de decisões que só o tempo
+> produz.
+
+---
+
+##  Arquitetura da V9
+
+Três componentes de responsabilidade isolada. A decisão de aprendizado de máquina sai do
+nível da operação individual e vai para o nível do contexto macroeconômico.
+
+* **Motor Bull** — compra correções em tendência de alta. Nunca vende. Não conhece o saldo,
+  a corretora, nem o outro motor.
+* **Motor Bear** — vende repiques em tendência de baixa. Nunca compra.
+* **Oráculo de Regime** — decide qual motor está em serviço. Uma decisão por período; não
+  escolhe ativo, momento nem preço.
+
+### As três garantias estruturais
+
+| Garantia | Como |
+|---|---|
+| **Não vê o futuro** | A estratégia recebe um objeto que contém apenas fatias terminadas no instante corrente. Não é disciplina do programador — é impossível por construção |
+| **Um caminho de código** | Simular e operar diferem apenas em qual adaptador de corretora está acoplado (`papel.py` ou `carteira.py`) |
+| **Nenhum número sozinho** | `avaliacao/robustez.py` percorre todas as fases da grade e reporta média com erro padrão |
+
+Verificado por **111 testes automatizados**, entre os quais o de causalidade — que recalcula
+cada indicador usando apenas dados anteriores a um instante e compara com o cálculo sobre a
+série completa (divergência medida: `0,00e+00`).
 
 ---
 
@@ -64,311 +137,334 @@ O experimento mais importante do projeto: rodar a estratégia **idêntica**, com
 
 ```text
 Trader.AI/
-│  ── Bot em tempo real (API + WebSocket) ──────────────────────────────
-├── main.py                    # Ponto de entrada (API REST e inicialização do WebSocket)
-├── execution.py               # Motor autônomo de execução e gestão de risco
-├── strategy.py                # Core Matemático: Confluência com Scoring (V1)
-├── market_state.py            # Gerenciador de Estado: Memória RAM e histórico
-├── binance_stream.py          # Conexão WebSocket em Tempo Real com a Binance
 │
-│  ── Núcleo de IA ────────────────────────────────────────────────────
-├── v5_model.py                # Arquitetura BiLSTM + Attention (3 classes)
-├── v5_data_prep.py            # Features (18) e rótulos direcionais
-├── v6_data_prep.py            # Features enriquecidas (26): Bollinger, regime, sazonalidade
-├── v5_train.py                # Treino: Focal Loss, early stopping, --resume, pausa cooperativa
-├── v5_backtest.py             # Backtest híbrido: LONG/SHORT, TP/SL intrabar, regime, curvas de alavancagem
-├── v5_live.py                 # Motor híbrido em tempo real (paper trading)
+│  ══ V9 — sistema atual, reconstruído do zero ═════════════════════════
+├── trader-v9/
+│   ├── nucleo/
+│   │   ├── tipos.py               # Barra, Sinal, Posicao, Regime (dataclasses congeladas)
+│   │   └── protocolos.py          # Protocol: Motor, Oraculo, Corretora, VisaoDeMercado
+│   ├── dados/
+│   │   ├── indicadores.py         # RSI, MACD, Bollinger, ATR — escritos à mão, testados
+│   │   ├── visao.py               # Historico (tem tudo) e VisaoDeMercado (só o passado)
+│   │   ├── fonte.py               # Carrega parquets e traduz para o vocabulário da V9
+│   │   └── atualizar.py           # Completa o histórico local com o que já aconteceu
+│   ├── motores/
+│   │   ├── base.py                # Contrato comum + validação de lado
+│   │   ├── bull.py                # Especialista de alta
+│   │   └── bear.py                # Especialista de baixa
+│   ├── oraculo/
+│   │   ├── features.py            # 30 atributos macro (4h e diário, barras fechadas)
+│   │   ├── modelo.py              # Walk-forward com embargo; acurácia balanceada
+│   │   ├── teto.py                # Oráculo perfeito, moeda e controles fixos
+│   │   ├── ruidoso.py             # Oráculo de acurácia controlada (curva de alvo)
+│   │   └── classificador.py       # O modelo treinado, para uso ao vivo
+│   ├── execucao/
+│   │   ├── risco.py               # Sinal -> Ordem: tamanho e barreiras em ATR
+│   │   ├── papel.py               # Corretora simulada
+│   │   └── carteira.py            # Corretora real: comprado ou caixa, e nada mais
+│   ├── avaliacao/
+│   │   ├── replay.py              # O único laço — produção e simulação usam este
+│   │   ├── metricas.py            # Retorno, rebaixamento, comprar-e-manter
+│   │   └── robustez.py            # Varredura de fases + correção de Bonferroni
+│   ├── app/                       # Programas executáveis (ver seção de uso)
+│   ├── testes/                    # 111 testes, inclui o de não-vazamento
+│   ├── modelos/                   # Modelo treinado (.joblib) — treinar na máquina que usa
+│   ├── config/v9.toml             # Todo número ajustável do projeto
+│   └── deploy/                    # systemd + LEIA-ME do servidor
 │
-│  ── Execução real (Etapa 8) ─────────────────────────────────────────
-├── v6_executor.py             # Ordens na Binance Futures: dry-run, testnet, TP/SL na corretora
-├── v6_ciclo.py                # Ponte estratégia -> execução (importa a lógica do backtest)
+│  ══ V8 — instrumento de medição sobre o código de produção ══════════
+├── v8_simulador.py                # Replay minuto a minuto chamando as funções de produção
+├── v8_rank.py                     # Ranking de configurações
+├── v8_rank_honesto.py             # O mesmo, com margem de erro (o único defensável)
 │
-│  ── Ferramentas de análise (V6) ─────────────────────────────────────
-├── v6_ablacao.py              # Mede a contribuição real da rede neural (com vs sem)
-├── v6_edge_por_ativo.py       # Edge direcional por ativo
-├── v6_edge_por_faixa.py       # Edge por faixa de confiança (calibração)
-├── v6_calibracao.py           # Distribuição de confiança e precisão por faixa
-├── v6_exp_ativos.py           # Experimento: ampliar universo de ativos
-├── v6_exp_atr.py              # Experimento: stops adaptativos por volatilidade
-├── v6_exp_curvas.py           # Experimento: curvas de alavancagem
-├── v6_exp_regime.py           # Experimento: alavancagem condicionada ao regime
-├── v6_sweep_k.py              # Sweep de parâmetro na validação
-├── v6_veredito.py             # Comparação final V6 vs V5.9 com critério pré-definido
-├── v5_walkforward.py          # Walk-forward retraining (3 folds trimestrais)
-├── v5_run_experiments.py      # Pipeline de experimentos A/B
+│  ══ V7 — rotulagem por barreiras triplas e torneio de modelos ═══════
+├── v7_dataset.py                  # Base supervisionada: 6.619 eventos, 4 rotulagens
+├── v7_modelos.py                  # Torneio: Dummy, LogReg, RF, LightGBM, XGBoost, CatBoost
+├── v7_regras_por_regime.py        # Edge por BULL/LATERAL/BEAR
+├── v7_tendencia_diaria.py         # Seguir tendência em prazo diário
+├── v7_edge_funding.py             # Edge da taxa de financiamento
+├── v7_coleta_alternativa.py       # Coleta diária: funding, open interest, long/short
 │
-│  ── Controles operacionais (Windows, 1 clique) ──────────────────────
-├── treino_pausar.cmd          # Pausa o treino e libera a GPU
-├── treino_retomar.cmd         # Retoma o treino de onde parou
-├── religar_trader.cmd         # Religa treino + live após reiniciar o PC
+│  ══ V5–V6 — rede neural e ferramentas de investigação ═══════════════
+├── v5_model.py                    # BiLSTM + Attention (3 classes)
+├── v5_data_prep.py                # Features (18) e rótulos direcionais
+├── v5_train.py                    # Treino: Focal Loss, early stopping, --resume
+├── v5_backtest.py                 # Backtest híbrido LONG/SHORT com TP/SL intrabar
+├── v5_live.py                     # Paper trading
+├── v6_executor.py                 # Ordens na Binance Futures (parado desde 05/09/2026)
+├── v6_ciclo.py                    # Ponte estratégia -> execução
+├── v6_auditoria.py                # Consulta a corretora: saldo, ordens, proteção, resultado
+├── v6_ablacao.py                  # Contribuição da rede neural (com vs sem)
+├── v6_*.py                        # Demais ferramentas de análise e experimentos
 │
-│  ── ETL ─────────────────────────────────────────────────────────────
-├── download_binance_data.py   # Extração do Binance Vision (11 pares)
-├── processar_dados.py         # Transformação: CSV -> Parquet
-├── v6_refresh_dados.py        # Completa os parquets até "agora" via API REST
+│  ══ Bot V4 — API REST + WebSocket (histórico) ═══════════════════════
+├── main.py, execution.py, strategy.py, market_state.py, binance_stream.py
 │
-│  ── Documentação ────────────────────────────────────────────────────
-├── README.md                  # Este arquivo
-├── DOCUMENTACAO_TCC.md        # Documentação técnica completa (base do artigo)
-├── TRAJETORIA_VERSOES_TCC.md  # Evolução V1 -> V6 (seção do artigo)
-├── METODOLOGIA_EXPERIMENTAL.md# Protocolo científico e experimentos executados
+│  ══ ETL ═════════════════════════════════════════════════════════════
+├── download_binance_data.py       # Extração do Binance Vision (11 pares)
+├── processar_dados.py             # CSV -> Parquet
 │
-│  ── Gerados em runtime (não versionados) ────────────────────────────
-├── relatorios/                # TODA saída: logs, relatórios de backtest, resultados
-├── data/                      # Datasets históricos .parquet
-├── data_v6/                   # Dataset de treino (26 features)
-├── *.pth                      # Modelos treinados
-├── v5_live_state.json         # Estado do paper trading
-└── .env                       # Chaves da API (Testnet)
+│  ══ Documentação ════════════════════════════════════════════════════
+├── README.md                      # Este arquivo
+├── COMANDOS.md                    # Catálogo de comandos do projeto
+├── DOCUMENTACAO_TCC.md            # Documentação técnica completa
+├── METODOLOGIA_EXPERIMENTAL.md    # Protocolo científico e experimentos
+│
+│  ══ Gerados em runtime (não versionados) ════════════════════════════
+├── relatorios/                    # Toda saída: logs, relatórios, resultados
+├── data/                          # Datasets históricos .parquet
+├── *.pth                          # Modelos neurais treinados
+└── .env                           # Chaves da API
 ```
 
-> **Convenção:** toda saída gerada em execução vai para `relatorios/` — uma pasta, uma regra no `.gitignore`. O conteúdo é 100% regenerável, pois o código que o produz está versionado.
-             
+> **Convenção:** toda saída gerada em execução vai para `relatorios/` — uma pasta, uma regra
+> no `.gitignore`. O conteúdo é 100% regenerável, pois o código que o produz está versionado.
+
 ---
 
-##  Instalação e Execução
+##  Instalação
 
-### 1. Pré-requisitos
-* Python 3.10 ou superior instalado.
-* Git instalado.
-* (Opcional, recomendado para treino) GPU NVIDIA com CUDA.
+### Pré-requisitos
+* Python 3.12
+* Git
+* (Opcional, apenas para treinar a rede neural das V5/V6) GPU NVIDIA com CUDA
 
-### 2. Clonar o Repositório
+### Ambiente
+
 ```bash
-git clone https://github.com/SEU_USUARIO/Trader.AI.git
+git clone https://github.com/FilipeSJ1002/Trader.AI.git
 cd Trader.AI
-```
-
-### 3. Configurar o Ambiente Virtual (Obrigatório)
-No Windows:
-```bash
 python -m venv venv
-.\venv\Scripts\activate
-```
-
-No Linux ou macOS:
-```bash
-python3 -m venv venv
-source venv/bin/activate
-```
-
-### 4. Configurar Variáveis de Ambiente
-
-1. Copie o arquivo `.env.example` e renomeie a cópia para `.env`.
-2. Adicione suas credenciais da **Binance Testnet** dentro do `.env`:
-   - `BINANCE_API_KEY=sua_chave_aqui`
-   - `BINANCE_SECRET_KEY=sua_chave_secreta_aqui`
-
-### 5. Instalar Dependências
-
-```bash
+.\venv\Scripts\activate          # Windows
+source venv/bin/activate         # Linux / macOS
 pip install -r requirements.txt
+pip install -r trader-v9/requirements-v9.txt
 ```
 
----
+### Credenciais
 
-## Alimentando a Memória Inicial (ETL)
+A Binance mantém **testnets separadas** para spot e futuros, com contas e chaves distintas.
+Usar chave de spot em endpoint de futuros retorna `APIError -2015`.
 
-**Passo 1: Baixar Histórico** (11 pares, desde 2019)
-```bash
-python download_binance_data.py
-```
-
-**Passo 2: Processar para Parquet**
-```bash
-python processar_dados.py
-```
-
-**Passo 3 (opcional): Completar até agora** — o Binance Vision só publica meses fechados
-```bash
-python v6_refresh_dados.py
-```
-
----
-
-##  Treinando e Avaliando a IA
-
-**Preparar os dados de treino:**
-```bash
-python v5_data_prep.py --dual     # 18 features, experimentos A e B numa passada
-python v6_data_prep.py            # 26 features (V6)
-```
-
-**Treinar o modelo** (~13–16h em GTX 1650):
-```bash
-python v5_train.py --data data_v6 --model-out v6_model.pth --log v6_training.log --label V6.0 --resume --batch 192
-Get-Content relatorios/v6_training.log -Wait   # acompanhar ao vivo
-```
-O treino salva checkpoint a cada melhora e **retoma de onde parou** com `--resume` — resistente a quedas de energia, crashes de cuDNN e reinícios.
-
-**Rodar o backtest híbrido:**
-```bash
-python v5_backtest.py --model v5_model_b.pth          # teste (2026+)
-python v5_backtest.py --model v5_model_b.pth --val    # validação (H2-2025)
-python v5_backtest.py --model v5_model_b.pth --realop # diário detalhado de operações
-```
-
-Flags disponíveis:
-
-| Flag | Função |
-|---|---|
-| `--from / --to AAAA-MM-DD` | Período customizado |
-| `--assets ALL` ou lista | Universo de ativos (padrão: os 6 do treino) |
-| `--featset v5\|v6` | Conjunto de features (deve casar com o modelo) |
-| `--sl / --tp` | Stop loss / take profit percentuais |
-| `--sl-mode atr --atr-k N` | Stops proporcionais à volatilidade do ativo |
-| `--lev-curve {v59,edge,pico,flat1,flat2,regime}` | Curva de alavancagem |
-| `--forca-min N` | Força mínima da tendência para alavancar (curvas `regime`) |
-| `--ablacao sem_nn` | **Neutraliza a rede neural** (mede sua contribuição) |
-| `--max-lev`, `--no-short`, `--skip`, `--eval-step`, `--max-hold` | Ajustes finos |
-
-**Experimentos automatizados** (cada um roda dezenas de backtests e emite veredito):
-```bash
-python v6_ablacao.py        # a rede neural agrega valor?
-python v6_exp_regime.py     # alavancagem condicionada ao regime
-python v6_exp_curvas.py     # comparação de curvas de alavancagem
-python v6_edge_por_faixa.py # calibração: o edge cresce com a confiança?
-python v5_walkforward.py    # retreino trimestral vs modelo congelado
-```
-
----
-
-##  Paper Trading em Tempo Real
-
-Executa a estratégia com **preços reais da Binance** e ordens **simuladas** — a validação final antes de qualquer capital.
-
-```bash
-python v5_live.py                 # loop contínuo (ciclo de 15 min)
-python v5_live.py --once          # um único ciclo (teste)
-python v5_live.py --reset         # zera capital e posições
-Get-Content relatorios/v5_live.log -Wait
-```
-
-Estado persistente em `v5_live_state.json` (sobrevive a reinícios) e diário de operações em `v5_live_trades.csv`. Tolerante a quedas de rede e suspensão do PC.
-
-> **Atenção:** sinal raro é o design — a estratégia faz ~1 operação a cada 3 dias. Dias sem trades são normais.
-
----
-
-##  Execução Real na Binance Futures (Etapa 8)
-
-Traduz as decisões da estratégia em **ordens reais**. Construído com três travas
-de segurança independentes.
-
-### Pré-requisito: chaves da Futures Testnet
-
-A Binance mantém **testnets separadas** para spot e futuros, com contas e chaves
-distintas. Usar chave de spot em endpoint de futuros retorna `APIError -2015`.
-
-```bash
-python v6_executor.py --ajuda-chaves    # passo a passo completo
-```
-
-Resumo: acesse `testnet.binancefuture.com`, entre com GitHub/Google, copie as chaves
-no rodapé (aba "API Key") e adicione ao `.env`:
+Crie um `.env` na raiz com:
 
 ```
 BINANCE_FUTURES_API_KEY=sua_chave_de_futuros
 BINANCE_FUTURES_SECRET_KEY=sua_secret_de_futuros
 ```
 
-As chaves de spot permanecem inalteradas — o bot V4 continua usando-as.
-
-### Travas de segurança
-
-| Trava | Comportamento padrão | Como liberar |
-|---|---|---|
-| **Dry-run** | Registra o que faria; **não envia nada** | `--armar` |
-| **Testnet** | Dinheiro fictício | `--real` (exige confirmação digitada) |
-| **Limites** | Máx. 3 posições, 5x, 60% de exposição | Constantes no código |
-
-### Comandos
-
-```bash
-python v6_executor.py --status              # inspeciona conta e posições
-python v6_executor.py --once                # 1 ciclo em dry-run (nada é enviado)
-python v6_executor.py --once --armar        # 1 ciclo enviando ordens (testnet)
-python v6_executor.py --armar               # loop contínuo (testnet)
-python v6_executor.py --fechar BTCUSDT      # fecha uma posição manualmente
-python v6_executor.py --fechar-tudo         # fecha todas as posições
-```
-
-### Proteção independente do bot
-
-Ao abrir posição, o take profit e o stop loss são registrados como **ordens
-condicionais *reduce-only* na própria corretora**. Se o processo travar, o PC
-desligar ou faltar energia, o capital permanece protegido — a Binance executa a
-saída. Um sistema que depende de estar em execução para respeitar o stop é
-estruturalmente frágil.
-
-### Paridade com o backtest
-
-`v6_ciclo.py` **importa** `v1_scores` e `leverage_for` de `v5_backtest.py` em vez
-de reimplementá-las. A lógica que movimenta capital é, portanto, exatamente a
-mesma que foi validada — não uma cópia sujeita a divergir silenciosamente.
+Obtenha-as em `testnet.binancefuture.com` (aba "API Key" no rodapé).
 
 ---
 
-##  Bot V4 em Tempo Real (API + WebSocket)
+##  Uso — V9
+
+Todos os comandos partem de `trader-v9/` com `PYTHONPATH=.`.
+
+### Semear o histórico (uma vez)
+
+Baixa 2.600 dias em barras de 4h. **Não reduza esse número:** treinar com 257 dias derruba
+a acurácia para 50,07% — moeda.
 
 ```bash
-uvicorn main:app --reload
+cd trader-v9
+PYTHONPATH=. python -m app.semear
 ```
 
-**Comportamento Esperado:**
-1. O servidor carregará o arquivo Parquet na memória RAM (`market_state.py`).
-2. O servidor REST ficará disponível em `http://127.0.0.1:8000`.
-3. O WebSocket iniciará em segundo plano e as decisões aparecerão no terminal:
-   `[TRADER.AI]  Preço: $74434.37 | RSI: 65.20 | Decisão: NEUTRO`
+> As features do oráculo saem exclusivamente das visões diária e de 4h. Reconstruindo o
+> histórico a partir de barras de 4h, os 16 atributos resultam **idênticos** com 240 vezes
+> menos dados — de 3,7 horas de download para cerca de um minuto.
 
-> **Nota:** este motor ainda usa a estratégia de *trend-following* da V4. A integração da estratégia híbrida V5/V6 com execução real é o objetivo da **Etapa 8**.
+### Treinar o classificador
 
-###  Verificando o Saldo da Conta
+Treine **na máquina que vai usá-lo**: modelo em *pickle* não atravessa versões do
+scikit-learn.
+
 ```bash
-python teste_saldo.py
+PYTHONPATH=. python -m app.treinar_oraculo
+```
+
+Confira a linha de treino: deve indicar **~2.100 dias**. Se indicar 257, o histórico está
+curto e o modelo não vale nada.
+
+### Operar
+
+```bash
+PYTHONPATH=. python -m app.vivo                 # dry-run: decide e mostra, não envia
+PYTHONPATH=. python -m app.vivo --armar         # envia ordens (testnet)
+PYTHONPATH=. python -m app.vivo --armar --real  # produção (exige confirmação digitada)
+```
+
+**Leia a saída do dry-run antes de armar.** Ela já revelou um defeito de precisão numérica
+impresso em texto claro que passou despercebido — a quantidade era `0.009600000000000001`.
+
+O programa aborta se os dados não estiverem em dia: decidir sobre um mercado que já mudou
+é pior que não decidir.
+
+### Medir
+
+```bash
+PYTHONPATH=. python -m pytest testes -q         # 111 testes
+PYTHONPATH=. python -m app.cli teto             # teto do projeto, com margem de erro
+PYTHONPATH=. python app/curva_acuracia.py       # quanto rende cada nível de acurácia
+PYTHONPATH=. python app/treinar.py              # o classificador, fora da amostra
+PYTHONPATH=. python app/horizontes.py           # o regime é previsível em algum prazo?
+PYTHONPATH=. python app/alavancagem.py          # a alavancagem ajuda?
+PYTHONPATH=. python app/sobreposicao.py         # usar o sinal para proteger em vez de gerar
+PYTHONPATH=. python app/confianca.py            # a confiança do modelo carrega informação?
+PYTHONPATH=. python app/janela_de_treino.py     # quanto histórico o modelo precisa?
+PYTHONPATH=. python app/figuras.py --saida .    # figuras do artigo
+```
+
+### Servidor
+
+Passo a passo completo em [`trader-v9/deploy/LEIA-ME.md`](trader-v9/deploy/LEIA-ME.md).
+
+```bash
+sudo cp trader-v9/deploy/trader-v9.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now trader-v9.timer
+sudo journalctl -u trader-v9 -n 60 --no-pager
 ```
 
 ---
 
-##  Roadmap de Desenvolvimento
+##  Uso — ferramentas de pesquisa (V5 a V8)
 
-- [x] **Etapa 1:** Arquitetura Base, API e Estratégia de Confluência.
-- [x] **Etapa 2:** Integração com Dataset Histórico Real e ETL automatizado.
-- [x] **Etapa 3:** Conexão com API Binance via WebSockets e Decisões em Tempo Real.
-- [x] **Etapa 4:** Execução de Ordens (Integração de Contas, Scoring e Live Trading).
-- [x] **Etapa 5:** Rede Neural Direcional (BiLSTM + Attention) e Estratégia Híbrida Bidirecional (LONG/SHORT).
-- [x] **Etapa 6:** Validação *walk-forward* trimestral e motor de *paper trading* em tempo real com dados reais da Binance.
-- [x] **Etapa 7 (V6):** Investigação sistemática dos limites do sistema — ablação da rede neural, calibração de confiança, expansão de universo, stops adaptativos e curvas de alavancagem.
-- [~] **Etapa 8 (em andamento):** Ponte para execução real — `v6_executor.py` e `v6_ciclo.py` implementados e validados; aguarda credenciais da Futures Testnet para o primeiro ciclo com ordens.
+Preservadas e funcionais. Produziram os resultados das etapas 1 a 7 do artigo.
 
-###  Achados da Etapa 6 (walk-forward)
+### Auditoria da corretora
 
-Comparação honesta entre **retreinar o modelo a cada trimestre** vs. usar um **modelo congelado**, em 3 trimestres de dados nunca vistos (Q4-2025 a Q2-2026):
+```bash
+python v6_auditoria.py --dias 30
+```
 
-| Estratégia | Lucro acumulado (3 trimestres) |
-|---|---|
-| Modelo retreinado a cada trimestre | +2,0% |
-| Modelo congelado (jun/2025) | +2,0% |
+Mostra saldo, posições, ordens (comuns **e** condicionais), verificação de proteção e
+resultado financeiro. Fatia as consultas em janelas de 7 dias — a API limita o intervalo, e
+pedir 30 dias devolvia silenciosamente apenas os 7 primeiros.
 
-**Conclusão:** o retreino trimestral não trouxe ganho — o modelo congelado generaliza bem por ~11 meses. Retreinar por calendário foi descartado; o gatilho correto é a divergência entre desempenho ao vivo e esperado.
+### Simulação sobre o código de produção
 
-###  Achados da Etapa 7 (V6)
+```bash
+python v8_simulador.py --verificar               # prova que não vê o futuro
+python v8_simulador.py --de 2021-01-01 --ate 2026-07-25
+python v8_rank_honesto.py                        # ranking com margem de erro
+```
 
-Cinco hipóteses de melhoria testadas com rigor — **quatro refutadas, uma confirmada**:
+### Rede neural (V5/V6)
 
-| Hipótese | Veredito | Evidência |
+```bash
+python v5_data_prep.py --dual
+python v5_train.py --data data_v6 --model-out v6_model.pth --resume
+python v5_backtest.py --model v5_model_b.pth --val
+python v6_ablacao.py                             # contribuição da rede neural
+```
+
+### ETL
+
+```bash
+python download_binance_data.py    # Binance Vision, 11 pares desde 2019
+python processar_dados.py          # CSV -> Parquet
+```
+
+---
+
+##  Trajetória das versões
+
+| Geração | Abordagem | O que estabeleceu |
 |---|---|---|
-| A rede neural agrega valor? | ✅ **Confirmada** | **+8,0 p.p.** no teste; sem ela o sistema perde em todos os períodos |
-| Ampliar universo (6 → 11 ativos) | ❌ Refutada | Pior nos 3 splits (−0,7% vs +2,0% no teste) |
-| Stops adaptativos por volatilidade (ATR) | ❌ Refutada | Stop fixo vence com k de 6 a 12 |
-| Realinhar curva de alavancagem | ⚠️ Inconclusiva | Trade-off dependente do regime |
-| Enriquecer features (18 → 26) | ⚠️ Em avaliação | `val_loss` ainda atrás do modelo campeão |
+| **V1** | Regras determinísticas (RSI, MACD, Bollinger) | +16% no 1º mês real — posteriormente reclassificado como exposição ao mercado |
+| **V2–V3** | Gestão de risco; busca de equilíbrio | Segurança sim; retorno marginal ou negativo |
+| **V4** | ML clássico de árvores | Infraestrutura de ML; lucros baixos |
+| **V5** | BiLSTM + Attention; estratégia híbrida | Preservação de capital em regime adverso |
+| **V6** | Investigação sistemática; execução real | Enriquecimento de features refutado; ordens com proteção na corretora |
+| **V7** | Barreiras triplas; torneio de modelos | Alvo maior dilui a taxa — depois refutado pela curva de capital |
+| **V8** | Simulação sobre o código de produção | **Nenhuma configuração distinguível de zero** (14 testadas) |
+| **V9** | Dois motores + oráculo de regime | **Sinal real de 53,69% ± 0,90 (t = 3,40), abaixo do limiar de 58%** |
 
-**Descoberta transversal:** a alavancagem só compensa em **tendência forte**. Com *edge* estatístico modesto, alavancar em mercado lateral apenas multiplica o custo de fricção (taxas escalam com o notional) e a variância — sem melhorar a expectativa.
+### Sobre os resultados das gerações V1 a V7
 
-**Lição metodológica:** o *edge* direcional da rede medido em janelas aleatórias do mercado é ~0,50 (aleatório), o que sugeriria descartá-la. O estudo de ablação provou o contrário: ela não prevê o mercado do zero — **discrimina entre candidatos já filtrados pelo componente determinístico**. Métricas devem ser medidas no contexto real de uso, não em abstrato.
+Os resultados dessas etapas foram obtidos por **execução única, sem estimativa de
+dispersão**. Nenhum deles sobrevive ao critério estabelecido pela V8 — incluindo os +16% da
+V1, o ganho de 2,2% que motivou a adoção da configuração então vigente, e as comparações
+entre gerações.
 
-Detalhamento completo em [`METODOLOGIA_EXPERIMENTAL.md`](METODOLOGIA_EXPERIMENTAL.md).
+Isso **não invalida** os resultados apoiados em amostras grandes de operações: a expectância
+líquida medida sobre 8.702 operações e o teste do passeio aleatório permanecem válidos.
+Invalida especificamente as comparações de curva de capital entre configurações.
+
+O estudo de ablação da rede neural (V6, +8,0 p.p. no teste) **não foi reavaliado** sob o
+critério de robustez. Sua magnitude está na fronteira do ruído medido, e ele deve ser lido
+como não verificado, não como estabelecido.
+
+---
+
+##  Achados transversais
+
+**A escala temporal da barreira de risco domina o resultado.** O ATR calculado sobre candles
+de um minuto corresponde a 0,073% do preço no Bitcoin; um *stop* a 1,5 desses valores fica
+dentro do ruído. Mantida toda a demais configuração:
+
+| Escala do ATR | Retorno (6 meses) | Operações |
+|---|---|---|
+| 1 minuto | **−60,8%** | ~10.000 |
+| Diário | **+3,7%** | ~50 |
+
+**A alavancagem não compensa a ausência de vantagem — amplifica-a.**
+
+| Alavancagem | Retorno (3,5 anos) | Rebaixamento | Contas zeradas |
+|---|---|---|---|
+| **1x** | **+13,9% ± 7,6** | −32,6% | 0 / 6 |
+| 2x | +12,3% ± 14,2 | −56,6% | 0 / 6 |
+| 3x | −4,1% ± 17,3 | −73,5% | 0 / 6 |
+| 20x | −100,0% | −100% | **6 / 6** |
+
+**A confiança do modelo não carrega informação.** Nos 10% de dias em que o classificador
+atribui maior probabilidade, a acurácia é *inferior* à média em dois dos três modelos
+avaliados (50,64% contra 51,18% na regressão logística).
+
+**O limiar de viabilidade não é atributo do modelo, mas da arquitetura que o emprega.** A
+mesma capacidade de 53,69% exige 63% quando o sinal deve gerar todo o retorno, e 58% quando
+lhe cabe apenas modular a exposição a uma posição comprada.
+
+---
+
+##  Roadmap
+
+- [x] **Etapas 1–4:** Arquitetura base, ETL, WebSockets, execução de ordens
+- [x] **Etapa 5:** Rede neural direcional e estratégia híbrida bidirecional
+- [x] **Etapa 6:** Validação *walk-forward* e *paper trading*
+- [x] **Etapa 7:** Investigação sistemática dos limites (ablação, calibração, universo, stops)
+- [x] **Etapa 8:** Execução real na Binance Futures com proteção na corretora
+- [x] **Etapa 9:** Instrumento de medição com margem de erro; reconstrução V9; operação contínua
+- [ ] **Novembro de 2026:** Dados alternativos — a única alavanca técnica restante
+
+### A pergunta em aberto
+
+O coletor acumula taxa de financiamento, *open interest*, razão long/short e fluxo de
+*taker* desde 20/08/2026. Por volta de novembro haverá amostra utilizável, e a pergunta é
+fechada: **essas features levam os 53,69% além de 58%?**
+
+```bash
+cd trader-v9 && PYTHONPATH=. python app/horizontes.py
+```
+
+São 4,3 pontos percentuais de distância. Dados de posicionamento de mercado são
+qualitativamente diferentes de preço, que é o único insumo testado até aqui. Se passarem, há
+sistema. Se ficarem em 54%, a conclusão está fechada — e a resposta sai numa tarde.
+
+---
+
+##  O que não repetir
+
+Registrado porque foi medido, não porque foi suposto:
+
+* **Aumentar a alavancagem.** De 1x para 2x o retorno cai; em 20x a conta zera.
+* **Operar apenas nos dias de alta confiança.** A probabilidade emitida não discrimina.
+* **Ajustar TP/SL/parâmetros procurando algo melhor.** A variação entre ajustes é menor que
+  a variação entre relógios.
+* **Rede neural decidindo operação minuto a minuto.** Refutada na V6 e no torneio da V7.
+* **Aceitar número de *backtest* sem barra de erro.**
+* **Semear pouco histórico.** 257 dias derrubam o modelo para 50,07%.
 
 ---
 
@@ -377,4 +473,8 @@ Detalhamento completo em [`METODOLOGIA_EXPERIMENTAL.md`](METODOLOGIA_EXPERIMENTA
 Desenvolvido por **Filipe Spirlandeli Junqueira**.
 
 ---
-> Este projeto é estritamente educacional e experimental. O autor não se responsabiliza por perdas financeiras decorrentes do uso deste software em contas reais.
+> Este projeto é estritamente educacional e experimental. Os retornos citados são resultados
+> de simulação sobre dados históricos e de operação em ambiente de testes com capital
+> fictício — não constituem previsão de resultado futuro nem recomendação de investimento.
+> O autor não se responsabiliza por perdas financeiras decorrentes do uso deste software em
+> contas reais.
